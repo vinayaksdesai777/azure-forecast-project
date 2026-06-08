@@ -1,0 +1,33 @@
+{
+    "name": "tr_daily_schedule",
+    "type": "Microsoft.DataFactory/factories/triggers",
+    "properties": {
+        "type": "ScheduleTrigger",
+        "typeProperties": {
+            "recurrence": {
+                "frequency": "Day",
+                "interval": 1,
+                "startTime": "2024-01-01T06:00:00Z",
+                "timeZone": "UTC",
+                "schedule": {
+                    "hours": [6],
+                    "minutes": [0]
+                }
+            }
+        },
+        "pipelines": [
+            {
+                "pipelineReference": {
+                    "referenceName": "pl_master_etl_pipeline",
+                    "type": "PipelineReference"
+                },
+                "parameters": {
+                    "data_subject": "o9_forecast_daily",
+                    "storage_account": "your_adls_storage_account"
+                }
+            }
+        ],
+        "annotations": [],
+        "description": "Daily trigger at 6:00 AM UTC for the master ETL pipeline"
+    }
+}

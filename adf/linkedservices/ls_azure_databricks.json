@@ -1,0 +1,21 @@
+{
+    "name": "ls_azure_databricks",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "AzureDatabricks",
+        "typeProperties": {
+            "domain": "https://<databricks_workspace>.azuredatabricks.net",
+            "authentication": "MSI",
+            "workspaceResourceId": "/subscriptions/<subscription_id>/resourceGroups/<resource_group>/providers/Microsoft.Databricks/workspaces/<workspace_name>",
+            "existingClusterId": "<cluster_id>",
+            "newClusterNodeType": "Standard_DS3_v2",
+            "newClusterNumOfWorker": "2:8",
+            "newClusterSparkEnvVars": {
+                "PYSPARK_PYTHON": "/databricks/python3/bin/python3"
+            },
+            "newClusterVersion": "13.3.x-scala2.12"
+        },
+        "annotations": [],
+        "description": "Azure Databricks linked service for running transformation notebooks"
+    }
+}

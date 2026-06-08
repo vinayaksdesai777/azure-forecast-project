@@ -1,0 +1,34 @@
+{
+    "name": "tr_weekly_schedule",
+    "type": "Microsoft.DataFactory/factories/triggers",
+    "properties": {
+        "type": "ScheduleTrigger",
+        "typeProperties": {
+            "recurrence": {
+                "frequency": "Week",
+                "interval": 1,
+                "startTime": "2024-01-01T07:00:00Z",
+                "timeZone": "UTC",
+                "schedule": {
+                    "weekDays": ["Monday"],
+                    "hours": [7],
+                    "minutes": [0]
+                }
+            }
+        },
+        "pipelines": [
+            {
+                "pipelineReference": {
+                    "referenceName": "pl_master_etl_pipeline",
+                    "type": "PipelineReference"
+                },
+                "parameters": {
+                    "data_subject": "o9_forecast_weekly",
+                    "storage_account": "your_adls_storage_account"
+                }
+            }
+        ],
+        "annotations": [],
+        "description": "Weekly trigger every Monday at 7:00 AM UTC for weekly forecast data"
+    }
+}

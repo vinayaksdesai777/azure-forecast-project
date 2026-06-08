@@ -1,0 +1,20 @@
+{
+    "name": "ls_adls_gen2",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "AzureBlobFS",
+        "typeProperties": {
+            "url": "https://<storage_account>.dfs.core.windows.net",
+            "accountKey": {
+                "type": "AzureKeyVaultSecret",
+                "store": {
+                    "referenceName": "ls_keyvault",
+                    "type": "LinkedServiceReference"
+                },
+                "secretName": "adls-storage-key"
+            }
+        },
+        "annotations": [],
+        "description": "Azure Data Lake Storage Gen2 connection for landing, bronze, silver, gold containers"
+    }
+}

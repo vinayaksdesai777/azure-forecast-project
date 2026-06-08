@@ -1,0 +1,229 @@
+{
+    "name": "pl_master_etl_pipeline",
+    "properties": {
+        "description": "Master orchestration pipeline for the end-to-end ETL process. Ingests CSV from landing, transforms through Bronze > Silver > Gold layers using Databricks.",
+        "activities": [
+            {
+                "name": "Get Pipeline Metadata",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": {
+                            "value": "SELECT * FROM audit.pipeline_metadata WHERE data_subject = '@{pipeline().parameters.data_subject}' AND is_active = 1",
+                            "type": "Expression"
+                        }
+                    },
+                    "dataset": {
+                        "referenceName": "ds_azure_sql_metadata",
+                        "type": "DatasetReference"
+                    }
+                }
+            },
+            {
+                "name": "Check Source Files Exist",
+                "type": "GetMetadata",
+                "dependsOn": [
+                    {
+                        "activity": "Get Pipeline Metadata",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "typeProperties": {
+                    "dataset": {
+                        "referenceName": "ds_landing_csv",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "containerName": "landing",
+                            "folderPath": "@{activity('Get Pipeline Metadata').output.firstRow.source_path}",
+                            "fileName": "*"
+                        }
+                    },
+                    "fieldList": ["exists", "childItems"]
+                }
+            },
+            {
+                "name": "If Source Files Exist",
+                "type": "IfCondition",
+                "dependsOn": [
+                    {
+                        "activity": "Check Source Files Exist",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "typeProperties": {
+                    "expression": {
+                        "value": "@activity('Check Source Files Exist').output.exists",
+                        "type": "Expression"
+                    },
+                    "ifTrueActivities": [
+                        {
+                            "name": "Run Bronze Notebook",
+                            "type": "DatabricksNotebook",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.01:00:00",
+                                "retry": 1,
+                                "retryIntervalInSeconds": 60
+                            },
+                            "typeProperties": {
+                                "notebookPath": "/Shared/azure-data-pipeline/notebooks/01_ingest_to_bronze",
+                                "baseParameters": {
+                                    "data_subject": {
+                                        "value": "@pipeline().parameters.data_subject",
+                                        "type": "Expression"
+                                    },
+                                    "source_path": {
+                                        "value": "@concat('abfss://landing@', pipeline().parameters.storage_account, '.dfs.core.windows.net/', activity('Get Pipeline Metadata').output.firstRow.source_path)",
+                                        "type": "Expression"
+                                    }
+                                }
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "ls_azure_databricks",
+                                "type": "LinkedServiceReference"
+                            }
+                        },
+                        {
+                            "name": "Run Silver Notebook",
+                            "type": "DatabricksNotebook",
+                            "dependsOn": [
+                                {
+                                    "activity": "Run Bronze Notebook",
+                                    "dependencyConditions": ["Succeeded"]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.01:00:00",
+                                "retry": 1,
+                                "retryIntervalInSeconds": 60
+                            },
+                            "typeProperties": {
+                                "notebookPath": "/Shared/azure-data-pipeline/notebooks/02_bronze_to_silver",
+                                "baseParameters": {
+                                    "data_subject": {
+                                        "value": "@pipeline().parameters.data_subject",
+                                        "type": "Expression"
+                                    },
+                                    "batch_id": {
+                                        "value": "@json(activity('Run Bronze Notebook').output.runOutput).batch_id",
+                                        "type": "Expression"
+                                    }
+                                }
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "ls_azure_databricks",
+                                "type": "LinkedServiceReference"
+                            }
+                        },
+                        {
+                            "name": "Run Gold Notebook",
+                            "type": "DatabricksNotebook",
+                            "dependsOn": [
+                                {
+                                    "activity": "Run Silver Notebook",
+                                    "dependencyConditions": ["Succeeded"]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.01:00:00",
+                                "retry": 1,
+                                "retryIntervalInSeconds": 60
+                            },
+                            "typeProperties": {
+                                "notebookPath": "/Shared/azure-data-pipeline/notebooks/03_silver_to_gold",
+                                "baseParameters": {
+                                    "data_subject": {
+                                        "value": "@pipeline().parameters.data_subject",
+                                        "type": "Expression"
+                                    },
+                                    "batch_id": {
+                                        "value": "@json(activity('Run Silver Notebook').output.runOutput).batch_id",
+                                        "type": "Expression"
+                                    }
+                                }
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "ls_azure_databricks",
+                                "type": "LinkedServiceReference"
+                            }
+                        },
+                        {
+                            "name": "Run Aggregated Audit Notebook",
+                            "type": "DatabricksNotebook",
+                            "dependsOn": [
+                                {
+                                    "activity": "Run Gold Notebook",
+                                    "dependencyConditions": ["Succeeded"]
+                                }
+                            ],
+                            "policy": {
+                                "timeout": "0.00:30:00",
+                                "retry": 1,
+                                "retryIntervalInSeconds": 60
+                            },
+                            "typeProperties": {
+                                "notebookPath": "/Shared/azure-data-pipeline/notebooks/04_aggregated_audit",
+                                "baseParameters": {
+                                    "data_subject": {
+                                        "value": "@pipeline().parameters.data_subject",
+                                        "type": "Expression"
+                                    },
+                                    "batch_id": {
+                                        "value": "@json(activity('Run Gold Notebook').output.runOutput).batch_id",
+                                        "type": "Expression"
+                                    }
+                                }
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "ls_azure_databricks",
+                                "type": "LinkedServiceReference"
+                            }
+                        }
+                    ],
+                    "ifFalseActivities": [
+                        {
+                            "name": "Log No Source Files",
+                            "type": "SqlServerStoredProcedure",
+                            "typeProperties": {
+                                "storedProcedureName": "audit.usp_insert_audit",
+                                "storedProcedureParameters": {
+                                    "batch_id": { "value": "@concat(pipeline().parameters.data_subject, '_', utcNow('yyyyMMddHHmmss'))" },
+                                    "application_id": { "value": "@pipeline().RunId" },
+                                    "object_name": { "value": "@pipeline().parameters.data_subject" },
+                                    "data_layer": { "value": "LANDING" },
+                                    "job_status": { "value": "NO_DATA" },
+                                    "source_system": { "value": "@activity('Get Pipeline Metadata').output.firstRow.source_system" }
+                                }
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "ls_azure_sql_audit",
+                                "type": "LinkedServiceReference"
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        "parameters": {
+            "data_subject": {
+                "type": "string",
+                "defaultValue": "o9_forecast_daily"
+            },
+            "storage_account": {
+                "type": "string",
+                "defaultValue": "your_adls_storage_account"
+            }
+        },
+        "annotations": ["ETL", "Medallion", "Bronze-Silver-Gold"],
+        "folder": {
+            "name": "o9_data_pipeline"
+        }
+    }
+}

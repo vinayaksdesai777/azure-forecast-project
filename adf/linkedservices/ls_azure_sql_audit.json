@@ -1,0 +1,19 @@
+{
+    "name": "ls_azure_sql_audit",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "AzureSqlDatabase",
+        "typeProperties": {
+            "connectionString": {
+                "type": "AzureKeyVaultSecret",
+                "store": {
+                    "referenceName": "ls_keyvault",
+                    "type": "LinkedServiceReference"
+                },
+                "secretName": "sql-audit-connection-string"
+            }
+        },
+        "annotations": [],
+        "description": "Azure SQL Database for audit and metadata tables"
+    }
+}
