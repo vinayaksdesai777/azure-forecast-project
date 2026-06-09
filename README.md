@@ -1,4 +1,4 @@
-# Azure End-to-End Data Pipeline — o9 Forecast Medallion Architecture
+# Azure End-to-End Data Pipeline — xyz Forecast Medallion Architecture
 
 A production-style data engineering project that ingests xyz supply-chain forecast data, processes it through a Bronze → Silver → Gold Medallion architecture on **Azure Databricks**, and serves analytics-ready tables with a full audit trail. Built with Delta Lake, PySpark, Azure Data Factory, Unity Catalog, Azure SQL, and Terraform IaC.
 
@@ -26,7 +26,7 @@ If you build this for real, you will be able to defend every design choice in an
 
 ```mermaid
 flowchart LR
-    SRC["Sources\nCSV Files (o9 Export)"]
+    SRC["Sources\nCSV Files (xyz Export)"]
     LND["Landing\nADLS Gen2"]
     BRZ["Bronze\nRaw Delta"]
     SLV["Silver\nCleansed · DQ · Typed"]
