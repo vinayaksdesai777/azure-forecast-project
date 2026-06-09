@@ -1,6 +1,6 @@
 # Azure End-to-End Data Pipeline — o9 Forecast Medallion Architecture
 
-A production-style data engineering project that ingests o9 supply-chain forecast data, processes it through a Bronze → Silver → Gold Medallion architecture on **Azure Databricks**, and serves analytics-ready tables with a full audit trail. Built with Delta Lake, PySpark, Azure Data Factory, Unity Catalog, Azure SQL, and Terraform IaC.
+A production-style data engineering project that ingests xyz supply-chain forecast data, processes it through a Bronze → Silver → Gold Medallion architecture on **Azure Databricks**, and serves analytics-ready tables with a full audit trail. Built with Delta Lake, PySpark, Azure Data Factory, Unity Catalog, Azure SQL, and Terraform IaC.
 
 > This is a build-along spec, not a finished repo. Work through the phases in order. Each phase has acceptance criteria — don't move on until you can tick every box and explain *why* you did it that way. The "why" is what you'll be asked about in interviews.
 
