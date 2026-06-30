@@ -72,14 +72,21 @@ SOURCE SYSTEMS
    (bad PK rows)
                          │
                          ▼
-              ┌─────────────────────┐
-              │  Azure SQL          │
-              │  audit-db           │
-              │  audit.pipeline_audit│
-              │  audit.data_quality  │
-              │  audit.pipeline_     │
-              │        metadata      │
-              └─────────────────────┘
+              ┌──────────────────────────────┐
+              │  Databricks Unity Catalog    │
+              │  hpe_catalog.audit           │
+              │  ├── job_log (Delta)         │
+              │  │   batch_id, insert_time,  │
+              │  │   records_inserted,       │
+              │  │   records_updated,        │
+              │  │   status, layer           │
+              │  └── data_quality_log(Delta) │
+              │                              │
+              │  Azure SQL (pipeline config) │
+              │  audit.pipeline_metadata     │
+              │  audit.source_extract_       │
+              │        metadata              │
+              └──────────────────────────────┘
 ```
 
 ---
@@ -199,6 +206,14 @@ SOURCE SYSTEMS
 - Dims: `dim_product`, `dim_location`, `dim_time` — SCD Type 2
 - KPI: `o9_forecast_agg_audit` — keyfigure/amount aggregations for PowerBI/Tableau
 
+**Audit / Job Tracking** (`hpe_catalog.audit`) — Delta tables in Unity Catalog (not Azure SQL):
+- `job_log` — one row per notebook run: `batch_id`, `insert_time`, `records_inserted`, `records_updated`, `status`, `layer`
+- `data_quality_log` — one row per DQ check per run
+
+**Azure SQL** (`audit-db`) — used only for pipeline configuration, not job tracking:
+- `audit.pipeline_metadata` — runtime config per data_subject (paths, table names, frequency)
+- `audit.source_extract_metadata` — extraction config per source object (watermarks, connectors)
+
 ### 6.3 Star Schema
 
 ```
@@ -279,5 +294,5 @@ No credentials are hard-coded anywhere in notebooks, pipelines, or linked servic
 | SCD Type 2 in Silver | Delta MERGE-based history tracking for product, customer, location, forecast dimensions |
 | Periodic fact table | Append-only Gold fact table; no overwrite of historical periods |
 | Bronze quarantine | Route DQ failures to `bronze.quarantine` instead of dropping |
-| Job tracking Delta table | Move `audit.pipeline_audit` to Unity Catalog Delta table with inserted/updated split |
+| Job tracking Delta table | Replace `audit.pipeline_audit` (Azure SQL) with `hpe_catalog.audit.job_log` (Delta, Unity Catalog). Columns: `batch_id`, `insert_time`, `records_inserted`, `records_updated`, `status`, `layer`. Governed by UC access control alongside all other tables. |
 | `00_config` notebook | Create missing shared config notebook (catalog name, storage paths, batch ID generation) |

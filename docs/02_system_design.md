@@ -78,8 +78,14 @@
                                                gold.o9_forecast_agg_audit
                                                (keyfigure/amount rows)
 
-          All notebooks write to ──►  Azure SQL: audit.pipeline_audit
-                                      (batch_id, status, row counts, layer)
+          All notebooks write to ──►  hpe_catalog.audit.job_log (Delta, Unity Catalog)
+                                      (batch_id, insert_time, records_inserted,
+                                       records_updated, status, layer)
+                                      hpe_catalog.audit.data_quality_log (Delta)
+
+          ADF pipelines read from ──► Azure SQL: audit.pipeline_metadata
+                                      audit.source_extract_metadata
+                                      (config only — not job tracking)
 ```
 
 ---
@@ -250,27 +256,38 @@ Append to hpe_catalog.gold.o9_forecast_agg_audit
 
 ## 3. Database Schemas
 
-### 3.1 Azure SQL — audit-db
+### 3.1 Azure SQL — audit-db (pipeline configuration only)
 
 ```sql
-audit.pipeline_metadata        -- one row per data_subject (config)
+audit.pipeline_metadata        -- one row per data_subject (runtime config)
   data_subject, source_system, source_path, bronze_table,
   silver_table, gold_table, frequency, is_active
 
-audit.source_extract_metadata  -- one row per source object (extraction config)
+audit.source_extract_metadata  -- one row per source object (extraction config + watermark)
   source_system, connector, source_schema, source_object,
   landing_path, data_subject, load_type, watermark_column,
   last_watermark, is_active
+```
 
-audit.pipeline_audit           -- one row per notebook run (job tracking)
-  batch_id, application_id, object_name, data_layer,
-  job_start_ts, job_end_ts, job_status, job_duration_sec,
-  source_row_count, target_row_count, error_record_count,
-  source_system, file_name, load_job_number
+> Azure SQL holds **configuration only**. Job tracking and DQ logs live in Unity Catalog (see 3.2 below).
 
-audit.data_quality_log         -- one row per DQ check per run
-  batch_id, table_name, check_type, records_checked,
-  records_passed, records_failed, check_ts
+### 3.2 Unity Catalog — hpe_catalog.audit (job tracking + DQ)
+
+```sql
+hpe_catalog.audit.job_log      -- one row per notebook run per layer
+  batch_id        STRING        -- UUID from ADF, links all layers in one run
+  insert_time     TIMESTAMP     -- when the row was written
+  layer           STRING        -- bronze / silver / gold / agg_audit
+  status          STRING        -- SUCCESS / FAILED
+  records_inserted BIGINT       -- new rows written
+  records_updated  BIGINT       -- rows updated (SCD2 merges in Silver/Gold)
+  source_system   STRING
+  data_subject    STRING
+  error_message   STRING        -- NULL on success
+
+hpe_catalog.audit.data_quality_log   -- one row per DQ check per run
+  batch_id, table_name, check_type,
+  records_checked, records_passed, records_failed, check_ts
 ```
 
 ### 3.2 Unity Catalog — hpe_catalog
