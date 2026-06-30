@@ -1,6 +1,6 @@
-# Azure End-to-End Data Pipeline — xyz Forecast Medallion Architecture
+# Azure End-to-End Data Pipeline — HPE o9 Forecast Medallion Architecture
 
-A production-style data engineering project that ingests xyz supply-chain forecast data, processes it through a Bronze → Silver → Gold Medallion architecture on **Azure Databricks**, and serves analytics-ready tables with a full audit trail. Built with Delta Lake, PySpark, Azure Data Factory, Unity Catalog, Azure SQL, and Terraform IaC.
+A production-style data engineering project that ingests HPE o9 supply-chain forecast data from SAP HANA, SQL Server, and Salesforce, processes it through a Bronze → Silver → Gold Medallion architecture on **Azure Databricks**, and serves analytics-ready tables with a full audit trail. Built with Delta Lake, PySpark, Azure Data Factory, Unity Catalog, Azure SQL, and Terraform IaC.
 
 > This is a build-along spec, not a finished repo. Work through the phases in order. Each phase has acceptance criteria — don't move on until you can tick every box and explain *why* you did it that way. The "why" is what you'll be asked about in interviews.
 
@@ -16,7 +16,6 @@ Most portfolio pipelines stop at "read a CSV, write a Parquet." This one deliber
 - Idempotent loads so re-runs never corrupt data
 - A centralised audit trail across every layer, queryable from a single SQL database
 - Dimensional modelling (star schema with SCD Type 2) for the serving layer
-- Infrastructure as Code so the entire platform is reproducible in minutes
 
 If you build this for real, you will be able to defend every design choice in an interview — which is the entire point.
 
@@ -77,7 +76,6 @@ A standalone image version lives at [`architecture.svg`](./architecture.svg) for
 | Secrets | Azure Key Vault — connection strings and storage keys |
 | Governance | Unity Catalog — catalogs, schemas, lineage, access grants |
 | Modelling | Dimensional modelling — star schema, SCD Type 2 |
-| Infrastructure | Terraform — full Azure resource provisioning via IaC |
 | Language | Python (PySpark), SQL, JSON (ADF definitions) |
 | Testing | pytest — unit tests for data quality and transformation functions |
 
@@ -98,8 +96,6 @@ A standalone image version lives at [`architecture.svg`](./architecture.svg) for
 ```
 azure-data-pipeline/
 ├── README.md
-├── infrastructure/
-│   └── main.tf                         # Terraform: all Azure resources
 ├── conf/
 │   └── pipeline_config.json            # Paths, table names, env params
 ├── databricks/
@@ -146,13 +142,13 @@ azure-data-pipeline/
 
 ### Phase 0 — Environment setup
 
-- Provision all Azure resources via **Terraform** (`infrastructure/main.tf`): resource group, ADLS Gen2 (5 containers), Azure SQL Database, Databricks workspace (Standard SKU), Data Factory, and Key Vault.
+- Provision all Azure resources via the Azure CLI or Portal: resource group, ADLS Gen2 (5 containers), Azure SQL Database, Databricks workspace (Standard SKU), Data Factory, and Key Vault. See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) Step 1 for the exact commands.
 - Set up Unity Catalog: a catalog (`hpe_catalog`) with schemas `bronze`, `silver`, `gold`.
 - Create the Azure SQL audit database schema: run `sql/01_audit_tables.sql` to create `audit.pipeline_audit`, `audit.data_quality_log`, and `audit.pipeline_metadata`.
 - Seed `pipeline_metadata` with one row per data subject + frequency (daily, weekly, monthly, quarterly), including the null-check columns, partition column, group columns, and metric columns for each.
 - Connect the Databricks workspace to your Git repo via Repos.
 
-**Acceptance:** Terraform applies cleanly; you can run notebook `00_config.py` and see it resolve paths; a `SELECT * FROM audit.pipeline_metadata` returns four rows; Unity Catalog explorer shows `hpe_catalog.bronze`, `.silver`, `.gold` schemas.
+**Acceptance:** all resources provision cleanly; you can run notebook `00_config.py` and see it resolve paths; a `SELECT * FROM audit.pipeline_metadata` returns four rows; Unity Catalog explorer shows `hpe_catalog.bronze`, `.silver`, `.gold` schemas.
 
 ### Phase 1 — Bronze: raw ingestion with full audit
 
@@ -204,7 +200,7 @@ azure-data-pipeline/
 
 **Acceptance:** `pytest tests/test_data_quality.py` passes all tests; `vw_dq_summary` shows a pass rate below 100% when you seed a bad row; `vw_daily_load_summary` shows the correct row and duration for today's run.
 
-### Phase 6 — Governance and infrastructure hardening
+### Phase 6 — Governance and performance hardening
 
 - Apply Unity Catalog grants: a "read-only analyst" role can `SELECT` on Gold schemas but not Bronze or Silver.
 - Confirm lineage graph in Unity Catalog shows Bronze → Silver → Gold for `o9_forecast_raw` → `o9_forecast_ref` → `o9_forecast_dmnsn`.
@@ -232,7 +228,6 @@ These are the choices to make deliberately and be ready to justify.
 | Audit strategy | Centralised Azure SQL database | Every layer writes structured audit entries (batch_id, status, row counts, duration) to a single queryable store — no scattered log files. |
 | DQ policy | Hard fail on null PKs, soft quarantine for type issues | Null primary keys are unrecoverable and must stop the pipeline; type mismatches can be isolated and investigated without blocking valid rows. |
 | Secrets | Azure Key Vault references in linked services | No credentials in code, notebooks, or ADF JSON checked into source control. |
-| Infrastructure | Terraform IaC | The entire platform can be torn down and recreated in minutes; no click-through provisioning that can't be reviewed or versioned. |
 
 ---
 
@@ -244,7 +239,6 @@ Be honest about these in interviews — acknowledging tradeoffs is a senior sign
 - **Overwrite on Bronze vs append:** Overwriting Bronze means you lose the ability to query "what did the source look like three weeks ago" from the Delta table. The archive container partially compensates, but Delta time travel on Bronze would be richer. Overwrite was chosen to keep Bronze storage bounded and prevent the table from accumulating duplicate ingestions during development reruns.
 - **Append on Silver vs MERGE:** Appending to Silver is simpler and performant, but it means querying Silver must always filter by `_batch_id` or `_ingestion_date` to avoid double-counting. A MERGE on the business key would be safer for analytical queries but adds SCD2-style complexity at the cleansing layer. Documented as a known limitation.
 - **SCD Type 2 vs SCD Type 1 on dimensions:** Type 2 multiplies row counts and requires every fact query to join on `is_current = true` or a validity window. Type 1 is simpler and cheaper but destroys historical accuracy (what segment a product *was* at order time). Chosen Type 2 on dimensions where the history has analytical value.
-- **Terraform vs ARM/Bicep:** Terraform is cloud-agnostic and has a richer ecosystem than ARM/Bicep, but adds a non-Azure toolchain dependency. ARM/Bicep would be a valid choice in a pure-Azure organisation with existing ARM skills.
 - **Compute cost vs realism:** Development on a small single-node Databricks cluster (or Free Edition) keeps costs near zero but won't surface shuffle and skew problems that appear at production scale. Acknowledge this as a deliberate demo constraint.
 - **Audit DB in Azure SQL vs Delta tables:** Storing audit data in Azure SQL gives you transactional writes and easy SQL tooling for monitoring. Storing it in Delta would keep everything in the lakehouse. SQL was chosen because audit writes are low-volume and transactional, not analytical — SQL's strengths, not Spark's.
 
@@ -279,14 +273,13 @@ Use this to connect the work to the questions you'll be asked:
 - `stack()` transposition in aggregation → "How do you pivot data in PySpark without a fixed schema?"
 - `audit.pipeline_audit` + views → "How do you make a pipeline observable?"
 - Key Vault linked service → "How do you manage secrets in a production pipeline?"
-- Terraform `main.tf` → "How do you provision cloud infrastructure repeatably?"
 - `test_data_quality.py` → "How do you test a data pipeline?"
 
 ---
 
 ## How to deploy
 
-1. **Provision infrastructure:** `cd infrastructure && terraform init && terraform apply` — creates resource group, ADLS, SQL, Databricks, ADF, Key Vault.
+1. **Provision infrastructure:** create the resource group, ADLS, SQL, Databricks, ADF, and Key Vault via the Azure CLI or Portal — see [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) Step 1.
 2. **Store secrets:** add the ADLS key and SQL connection string to Key Vault; update linked service JSON references to match your Key Vault name.
 3. **Create audit schema:** connect to the Azure SQL Database and run `sql/01_audit_tables.sql` to create tables, stored procedures, and seed `pipeline_metadata`.
 4. **Import Databricks notebooks:** upload `databricks/notebooks/` and `databricks/utilities/` to your Databricks workspace. Set the Unity Catalog to `hpe_catalog`.
@@ -304,4 +297,4 @@ Use this to connect the work to the questions you'll be asked:
 - Introduce **Delta Live Tables / Lakeflow** declarative pipelines and compare the maintainability against the current notebook approach.
 - Add **expectations-based data observability**: freshness monitors (alert if Silver hasn't been updated in N hours), volume monitors (alert if row count drops > 20% vs prior run).
 - Extend the **CI/CD pipeline** to run `pytest` on pull requests and deploy the ADF pipeline JSON to a dev factory automatically using the ADF CI/CD integration with GitHub Actions.
-- Add **cost monitoring**: Databricks cluster policy to cap DBU consumption, plus a Terraform module for Azure Cost Management alerts.
+- Add **cost monitoring**: Databricks cluster policy to cap DBU consumption, plus Azure Cost Management alerts.
