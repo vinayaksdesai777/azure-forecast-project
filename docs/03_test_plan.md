@@ -94,17 +94,16 @@ def test_validate_not_null_filters_correctly(spark):
 | IT-08 | Idempotent re-run | Re-run Bronze on same input | Row count unchanged (overwrite mode) |
 
 ### 3.2 Silver Layer
+> Silver receives pre-cleaned rows from Bronze (no NULL PKs, no duplicates). Silver's job is SCD2, business logic, aggregations.
 
 | Test ID | What to Test | How to Verify | Expected |
 |---|---|---|---|
-| IT-09 | Row count after cleaning | `SELECT COUNT(*) FROM hpe_catalog.silver.o9_forecast_ref WHERE _batch_id='<id>'` | 9,800 minus quarantined rows |
+| IT-09 | Row count in Silver | `SELECT COUNT(*) FROM hpe_catalog.silver.o9_forecast_ref WHERE is_active=true` | = Bronze valid row count |
 | IT-10 | Types correctly cast | `DESCRIBE hpe_catalog.silver.o9_forecast_ref` | forecast_date=DATE, forecast_qty=DECIMAL, revenue_amount=DECIMAL |
-| IT-11 | No NULL PKs in Silver | `SELECT COUNT(*) WHERE product_id IS NULL OR location_id IS NULL OR forecast_date IS NULL` | 0 |
-| IT-12 | No exact duplicates | `SELECT product_id, location_id, forecast_date, _frequency, COUNT(*) GROUP BY ... HAVING COUNT(*)>1` | 0 rows |
-| IT-13 | Mixed case standardized | `SELECT COUNT(*) WHERE category != UPPER(category)` | 0 (all uppercase) |
-| IT-14 | Invalid currency flagged | `SELECT COUNT(*) FROM audit.data_quality_log WHERE check_type='currency_validation' AND records_failed>0` | > 0 (100 XX rows caught) |
-| IT-15 | DQ log populated | `SELECT * FROM audit.data_quality_log WHERE batch_id='<id>'` | Rows for null_check, dedup, type_cast checks |
-| IT-16 | Audit status = SUCCESS | `SELECT job_status FROM audit.pipeline_audit WHERE data_layer='silver'` | 'SUCCESS' |
+| IT-11 | SCD2 columns present | `DESCRIBE hpe_catalog.silver.o9_forecast_ref` | Shows effective_from, effective_to, is_active |
+| IT-12 | Invalid currency flagged but kept | `SELECT COUNT(*) FROM silver.o9_forecast_ref WHERE currency='XX'` > 0 AND `SELECT records_failed FROM audit.data_quality_log WHERE check_type='currency_validation'` > 0 | Rows exist in Silver; flagged in DQ log |
+| IT-13 | Period aggregations written | `SELECT COUNT(*) FROM hpe_catalog.silver.o9_forecast_period_agg` | > 0 |
+| IT-14 | Audit written to Unity Catalog | `SELECT job_status FROM hpe_catalog.audit.job_log WHERE layer='silver'` | 'SUCCESS' |
 
 ### 3.3 Gold Layer
 
@@ -156,13 +155,14 @@ def test_validate_not_null_filters_correctly(spark):
 
 | DQ Check | Source | Dirty Rows | Bronze Behaviour | Silver Behaviour |
 |---|---|---|---|---|
-| NULL customer_id | HANA, SF | 300 each | Preserved as NULL (raw) | NULL allowed (not a PK) |
-| Negative forecast_qty | HANA, SF, SQL | 200 each | Preserved as-is | Flagged in DQ log; filtered to quarantine or kept with flag |
-| Duplicate rows | All sources | 200 each | All rows ingested | Dedup: keep latest, drop rest |
-| Invalid category (LEGACY_HW) | HANA | 100 | Preserved | Standardize → map to UNKNOWN or quarantine |
-| Mixed case category | SQL Server | 300 | Preserved | UPPER() applied |
-| NULL revenue_amount | SQL Server | 200 | Preserved | NULL allowed (not a PK) |
-| Invalid currency (XX) | All sources | 100 each | Preserved | Flagged in DQ log |
+| NULL customer_id | HANA, SF | 300 each | Kept (not a PK — passes through) | NULL allowed; not flagged |
+| Negative forecast_qty | HANA, SF, SQL | 200 each | Kept (Bronze doesn't validate values) | Flagged in DQ log; row kept |
+| Duplicate rows | All sources | 200 each | **Deduped in Bronze** — keep 1, drop rest | Receives deduped rows only |
+| Invalid category (LEGACY_HW) | HANA | 100 | **UPPER()** applied in Bronze; value passed through | Flagged in DQ log (not in VALID_CATEGORIES); row kept |
+| Mixed case category | SQL Server | 300 | **UPPER()** applied in Bronze → 'SERVER', 'STORAGE' etc. | Receives standardized uppercase values |
+| NULL revenue_amount | SQL Server | 200 | Kept (not a PK — passes through) | NULL allowed; not flagged |
+| NULL PK (product_id / location_id / forecast_date) | Any | varies | **Quarantined in Bronze** → bronze.quarantine | Never reaches Silver |
+| Invalid currency (XX) | All sources | 100 each | Kept (Bronze doesn't validate values) | Flagged in DQ log; row kept in Silver |
 
 ### 5.2 Verification Queries
 
@@ -250,24 +250,25 @@ assert df.count() == 9800, f"Expected 9800, got {df.count()} — LIMIT 200 bug s
 ---
 
 ### 8.2 Bronze — Standardization, PK Check, Dedup, Quarantine
+> Bronze owns: column standardization, PK null check, exact dedup, quarantine routing, success/failure status.
 
 | Test ID | Test | Expected |
 |---|---|---|
-| GAP-B01 | After Bronze run, check `category` column | All values uppercase — no `'server'`, `'Storage'` etc. |
-| GAP-B02 | Check `bronze.quarantine` row count | Equals rows with NULL product_id OR location_id OR forecast_date in source |
-| GAP-B03 | Check `bronze.o9_forecast_raw` has no NULL PKs | `SELECT COUNT(*) WHERE product_id IS NULL` = 0 |
-| GAP-B04 | Check `bronze.o9_forecast_raw` has no exact duplicates | `GROUP BY all source cols HAVING COUNT(*) > 1` = 0 rows |
-| GAP-B05 | Quarantine rows have `_dq_fail_reason` populated | `SELECT DISTINCT _dq_fail_reason FROM bronze.quarantine` shows 'NULL_PK' |
-| GAP-B06 | Audit log written to UC not Azure SQL | `SELECT * FROM hpe_catalog.audit.job_log WHERE layer='bronze'` returns rows |
+| GAP-B01 | `category` column in `bronze.o9_forecast_raw` | All uppercase — no `'server'`, `'Storage'` |
+| GAP-B02 | `bronze.quarantine` row count after run | = number of rows with NULL product_id OR location_id OR forecast_date in source |
+| GAP-B03 | `bronze.o9_forecast_raw` has no NULL PKs | `SELECT COUNT(*) WHERE product_id IS NULL OR location_id IS NULL OR forecast_date IS NULL` = 0 |
+| GAP-B04 | `bronze.o9_forecast_raw` has no exact duplicates | `GROUP BY product_id, location_id, forecast_date, _frequency HAVING COUNT(*) > 1` = 0 rows |
+| GAP-B05 | Quarantine rows tagged with reason | `SELECT DISTINCT _dq_fail_reason FROM bronze.quarantine` = 'NULL_PK' |
+| GAP-B06 | Audit written to Unity Catalog not Azure SQL | `SELECT * FROM hpe_catalog.audit.job_log WHERE layer='bronze'` returns rows |
 
 ```sql
--- GAP-B01
+-- GAP-B01: no mixed case after Bronze standardization
 SELECT COUNT(*) FROM hpe_catalog.bronze.o9_forecast_raw
 WHERE category != UPPER(category);
 -- Expected: 0
 
--- GAP-B04
-SELECT product_id, location_id, forecast_date, _frequency, COUNT(*) as cnt
+-- GAP-B04: no duplicates after Bronze dedup
+SELECT product_id, location_id, forecast_date, _frequency, COUNT(*) cnt
 FROM hpe_catalog.bronze.o9_forecast_raw
 GROUP BY product_id, location_id, forecast_date, _frequency
 HAVING COUNT(*) > 1;
@@ -276,15 +277,20 @@ HAVING COUNT(*) > 1;
 
 ---
 
-### 8.3 Silver — SCD Type 2
+### 8.3 Silver — SCD Type 2, Business Logic, Aggregations
+> Silver owns: SCD Type 2 history tracking, business rule validation, period aggregations.
+> Silver does NOT do PK null check or dedup — those are Bronze responsibilities.
 
 | Test ID | Test | Expected |
 |---|---|---|
 | GAP-S01 | Silver schema has SCD2 columns | `DESCRIBE hpe_catalog.silver.o9_forecast_ref` shows `effective_from`, `effective_to`, `is_active` |
-| GAP-S02 | New record insert | `is_active=true`, `effective_from=today`, `effective_to=NULL` |
-| GAP-S03 | Changed record (category updated) | Old row: `is_active=false`, `effective_to=today`. New row: `is_active=true`, `effective_from=today` |
-| GAP-S04 | Unchanged record re-ingested | Only 1 active row — no duplicate insert |
+| GAP-S02 | New record first insert | `is_active=true`, `effective_from=today`, `effective_to=NULL` |
+| GAP-S03 | Changed record (e.g. category revised in source) | Old row: `is_active=false`, `effective_to=today`. New row: `is_active=true`, `effective_from=today` |
+| GAP-S04 | Unchanged record re-ingested (idempotent) | Only 1 active row — no duplicate insert |
 | GAP-S05 | `records_updated` in job_log > 0 after SCD2 merge with changes | `SELECT records_updated FROM hpe_catalog.audit.job_log WHERE layer='silver'` > 0 |
+| GAP-S06 | Invalid currency flagged in DQ log (not dropped) | `audit.data_quality_log` has rows for currency_validation with records_failed > 0. Silver still contains the row. |
+| GAP-S07 | Invalid category flagged in DQ log (not dropped) | Same as GAP-S06 for category_validation |
+| GAP-S08 | Period aggregations written | `SELECT COUNT(*) FROM hpe_catalog.silver.o9_forecast_period_agg` > 0 after Silver run |
 
 ```sql
 -- GAP-S03: verify SCD2 history for a changed product
@@ -293,6 +299,11 @@ FROM hpe_catalog.silver.o9_forecast_ref
 WHERE product_id = 'HPE-PROD-1234'
 ORDER BY effective_from;
 -- Expected: 2 rows — one with is_active=false, one with is_active=true
+
+-- GAP-S06: invalid currency rows still in Silver (flagged not dropped)
+SELECT COUNT(*) FROM hpe_catalog.silver.o9_forecast_ref
+WHERE currency = 'XX';
+-- Expected: > 0 (rows kept, violation logged to DQ log only)
 ```
 
 ---

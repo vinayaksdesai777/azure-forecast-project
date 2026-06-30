@@ -309,16 +309,17 @@ This section documents what the current code does vs what it must do. All items 
 ---
 
 ### 9.2 Bronze Zone
+> **Responsibility: read, standardize, null check, dedup, quarantine, status**
 
 | Aspect | Current (Code) | Target (Plan) |
 |---|---|---|
 | `insert_time` per row | `_ingestion_ts = current_timestamp()` ✅ | ✅ Already correct |
 | Column standardization | None — raw copy only | UPPER(category), TRIM all strings, align column names across sources |
-| PK null check | In Silver notebook (wrong layer) | Move to Bronze — route bad rows to quarantine |
-| Deduplication | Not done | Exact duplicate drop in Bronze before writing Delta |
-| Quarantine table | Does not exist | `hpe_catalog.bronze.quarantine` — receives all DQ-failed rows |
+| PK null check | In Silver notebook (wrong layer) | **Belongs in Bronze** — route bad rows to quarantine |
+| Deduplication | Not done | **Belongs in Bronze** — exact duplicate drop before writing Delta |
+| Quarantine table | Does not exist | `hpe_catalog.bronze.quarantine` — receives all DQ-failed rows with `_dq_fail_reason` |
 | Success/failure status | Writes to Azure SQL `pipeline_audit` | Write to `hpe_catalog.audit.job_log` (Delta, Unity Catalog) |
-| Write mode | `overwrite` | `overwrite` with `replaceWhere` on `_frequency + _ingestion_date` |
+| Write mode | `overwrite` | `overwrite` with `replaceWhere` on `(_frequency, date(_ingestion_ts))` |
 
 **Bronze target flow:**
 ```
@@ -326,57 +327,77 @@ Read Parquet from landing/
     │
     ├── Add audit cols (_ingestion_ts, _batch_id, _frequency, _file_name ...)
     ├── TRIM all string columns
-    ├── UPPER(category)
+    ├── UPPER(category)                          ← standardize across sources
+    ├── Align column names to common schema
     │
     ├── PK null check (product_id, location_id, forecast_date)
-    │   ├── Valid   → deduplicate → write to bronze.o9_forecast_raw (Delta)
-    │   └── Invalid → write to bronze.quarantine (Delta)
+    │   ├── Valid   → exact dedup → write to bronze.o9_forecast_raw (Delta)
+    │   └── Invalid → write to bronze.quarantine with _dq_fail_reason='NULL_PK'
     │
     └── Write status to hpe_catalog.audit.job_log
+        (records_inserted=valid, records_updated=0, status=SUCCESS/FAILED)
 ```
 
 **DDL addition required — `01_bronze_schema.sql`:**
 ```sql
 CREATE TABLE IF NOT EXISTS hpe_catalog.bronze.quarantine (
-    -- all source columns as STRING
     product_id      STRING, location_id STRING, forecast_date STRING,
     forecast_qty    STRING, revenue_amount STRING, customer_id STRING,
     channel STRING, category STRING, sub_category STRING,
     region STRING, country STRING, currency STRING, uom STRING,
-    -- audit cols
     _file_name      STRING,
     _ingestion_ts   TIMESTAMP,
     _batch_id       STRING,
     _frequency      STRING,
-    _dq_fail_reason STRING  COMMENT 'Why this row was quarantined'
+    _dq_fail_reason STRING COMMENT 'NULL_PK / TYPE_ERROR'
 )
 USING DELTA
-COMMENT 'Bronze quarantine: rows that failed PK null check or type validation';
+COMMENT 'Bronze quarantine: rows that failed DQ checks in Bronze layer';
 ```
 
 ---
 
 ### 9.3 Silver Zone
+> **Responsibility: SCD Type 2, business logic validation, aggregations**
 
 | Aspect | Current (Code) | Target (Plan) |
 |---|---|---|
-| SCD Type 2 | Not implemented — simple `append` write | Delta MERGE on product, customer, location, forecast with `effective_from`, `effective_to`, `is_active` |
-| Aggregations | None | Period-level aggregations written to silver agg table |
-| Business logic | Empty string → NULL only | Currency allowlist validation, category allowlist validation, case standardization |
-| Deduplication | Not in Silver | Moved to Bronze (see 9.2) |
-| Schema — SCD2 cols | Missing from `02_silver_schema.sql` | Add `effective_from DATE`, `effective_to DATE`, `is_active BOOLEAN` |
+| SCD Type 2 | Not implemented — simple `append` | Delta MERGE with `effective_from`, `effective_to`, `is_active` |
+| Business logic | Empty string → NULL only | Currency allowlist, category allowlist validation, flag violations in DQ log |
+| Aggregations | None | Period-level aggregations → `silver.o9_forecast_period_agg` |
+| Deduplication | Done in Silver (wrong layer) | **Moved to Bronze** — Silver receives pre-deduped rows from Bronze |
+| PK null check | Done in Silver (wrong layer) | **Moved to Bronze** — Silver only sees valid rows |
+| Schema — SCD2 cols | Missing from `02_silver_schema.sql` | Add `effective_from`, `effective_to`, `is_active` |
 
-**SCD Type 2 logic (target):**
+**SCD Type 2 logic:**
 ```
-For each incoming Silver row:
-  MATCH on (product_id, location_id, forecast_date, _frequency)
-  IF matched AND values changed:
-    UPDATE existing row: set effective_to = today, is_active = false
-    INSERT new row:      set effective_from = today, effective_to = NULL, is_active = true
-  IF matched AND no change:
-    skip (idempotent)
-  IF no match:
-    INSERT new row: effective_from = today, effective_to = NULL, is_active = true
+Read from bronze.o9_forecast_raw (current batch, valid rows only)
+    │
+    ├── Business logic validation:
+    │   category IN VALID_CATEGORIES → flag violations in audit.data_quality_log
+    │   currency IN VALID_CURRENCIES → flag violations in audit.data_quality_log
+    │   (flag only — do NOT drop rows; Silver keeps all data with flags)
+    │
+    ├── SCD2 MERGE into silver.o9_forecast_ref:
+    │   MATCH on (product_id, location_id, forecast_date, _frequency)
+    │
+    │   WHEN MATCHED AND values changed:
+    │     UPDATE: effective_to = today, is_active = false
+    │     INSERT: new row, effective_from = today, effective_to = NULL, is_active = true
+    │
+    │   WHEN MATCHED AND no change:
+    │     skip (idempotent)
+    │
+    │   WHEN NOT MATCHED:
+    │     INSERT: effective_from = today, effective_to = NULL, is_active = true
+    │
+    ├── Period aggregations:
+    │   GROUP BY (category, region, period, _frequency)
+    │   SUM(forecast_qty), SUM(revenue_amount)
+    │   → append to silver.o9_forecast_period_agg
+    │
+    └── Write to hpe_catalog.audit.job_log
+        (records_inserted=new rows, records_updated=scd2 updates)
 ```
 
 **Business logic rules:**
@@ -384,16 +405,14 @@ For each incoming Silver row:
 VALID_CATEGORIES = ['SERVER','STORAGE','COMPUTE','NETWORKING',
                     'PRIVATE_CLOUD','SUPERCOMPUTING','AI']
 VALID_CURRENCIES = ['USD','EUR','GBP','JPY','INR','SGD','AED','BRL']
-
-# Rows failing these → flagged in audit.data_quality_log, not quarantined
-# (NULL category/currency is allowed; WRONG value is flagged)
+# Violations flagged in data_quality_log — rows are NOT dropped in Silver
 ```
 
 **Schema additions required — `02_silver_schema.sql`:**
 ```sql
-effective_from   DATE     COMMENT 'SCD2: record valid from this date',
-effective_to     DATE     COMMENT 'SCD2: record valid until this date (NULL = current)',
-is_active        BOOLEAN  COMMENT 'SCD2: true = current version of the record'
+effective_from  DATE    COMMENT 'SCD2: record valid from this date',
+effective_to    DATE    COMMENT 'SCD2: record valid until this date (NULL = current)',
+is_active       BOOLEAN COMMENT 'SCD2: true = current active version'
 ```
 
 ---

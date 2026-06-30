@@ -127,7 +127,8 @@ ADF reads audit.source_extract_metadata
 
 ### 2.2 Bronze Flow (01_ingest_to_bronze) — Target Design
 
-> **Current code issues:** reads CSV (not Parquet), no column standardization, no dedup, no quarantine, PK null check is missing (it's in Silver), audit writes to Azure SQL not Unity Catalog.
+> **Responsibility: read, standardize, PK null check, dedup, quarantine, success/failure status**
+> Current code issues: reads CSV not Parquet, no standardization, no dedup, no quarantine, PK check wrongly sits in Silver, audit writes to Azure SQL.
 
 ```
 Read Parquet from landing/o9/<frequency>/
@@ -139,48 +140,47 @@ Add audit columns:
   _ingestion_ts = current_timestamp()   ← insert_time per row
   _frequency    = daily/weekly/monthly/quarterly
   _batch_id     = UUID from ADF parameter
-  _load_job_nr  = YYYYMMDDHHmmss
          │
          ▼
-Standardize columns (Bronze is the first cleanse point):
+Standardize (Bronze responsibility):
   TRIM all string columns
   UPPER(category)
-  align column names to common schema across HANA / SQL Server / Salesforce
+  Align column names to common schema across HANA / SQL Server / Salesforce
          │
          ▼
 PK null check (product_id, location_id, forecast_date):
-  ├── Valid rows   → dedup → write to hpe_catalog.bronze.o9_forecast_raw (Delta)
-  └── Invalid rows → write to hpe_catalog.bronze.quarantine (Delta)
-                     with _dq_fail_reason = 'NULL_PK'
+  ├── NULL/empty → write to hpe_catalog.bronze.quarantine
+  │                with _dq_fail_reason = 'NULL_PK'
+  └── Valid      → continue
          │
-Deduplication on valid rows:
+         ▼
+Exact dedup on valid rows:
   ROW_NUMBER() OVER (PARTITION BY product_id, location_id, forecast_date, _frequency
                      ORDER BY _ingestion_ts DESC)
-  Keep row_num = 1, drop rest
+  Keep row_num = 1, drop duplicates
          │
          ▼
-Write to hpe_catalog.bronze.o9_forecast_raw
-(Delta, replaceWhere on _frequency AND date(_ingestion_ts) = today)
+Write to hpe_catalog.bronze.o9_forecast_raw (Delta)
+  mode = replaceWhere (_frequency = current AND date(_ingestion_ts) = today)
          │
          ▼
-Archive source Parquet → archive/<frequency>/<timestamp>/
+Archive Parquet → archive/<frequency>/<timestamp>/
          │
          ▼
-Write to hpe_catalog.audit.job_log (Delta):
-  batch_id, insert_time, layer='bronze', status='SUCCESS'/'FAILED',
-  records_inserted=valid_count, records_updated=0
+Write to hpe_catalog.audit.job_log:
+  layer='bronze', records_inserted=valid_count,
+  records_updated=0, status=SUCCESS/FAILED
 ```
 
 ### 2.3 Silver Flow (02_bronze_to_silver) — Target Design
 
-> **Current code issues:** PK check done here (should be Bronze), no SCD2, no business rule validation, no aggregations, appends without dedup, audit writes to Azure SQL.
+> **Responsibility: SCD Type 2, business logic validation, aggregations**
+> Current code issues: wrongly does PK check + dedup here (moved to Bronze), no SCD2, no business validation, no aggregations, audit writes to Azure SQL.
 
 ```
 Read hpe_catalog.bronze.o9_forecast_raw
-WHERE _batch_id = current_batch_id AND _dq_fail_reason IS NULL
-         │
-         ▼
-Empty string → NULL cleansing (all STRING columns)
+WHERE _batch_id = current_batch_id
+(Bronze already guarantees: no NULL PKs, no exact duplicates)
          │
          ▼
 Type casting:
@@ -189,32 +189,34 @@ Type casting:
   revenue_amount → DECIMAL(16,2)
          │
          ▼
-Business rule validation (flag, don't drop):
-  currency IN ('USD','EUR','GBP','JPY','INR','SGD','AED','BRL')
-  category IN ('SERVER','STORAGE','COMPUTE','NETWORKING',
-               'PRIVATE_CLOUD','SUPERCOMPUTING','AI')
-  forecast_qty > 0
-  → log failures to hpe_catalog.audit.data_quality_log
+Business logic validation (flag violations, do NOT drop rows):
+  category NOT IN VALID_CATEGORIES → log to audit.data_quality_log
+  currency NOT IN VALID_CURRENCIES → log to audit.data_quality_log
          │
          ▼
 SCD Type 2 MERGE into hpe_catalog.silver.o9_forecast_ref:
   MATCH on (product_id, location_id, forecast_date, _frequency)
 
-  WHEN MATCHED AND values changed:
-    UPDATE: effective_to = today, is_active = false
-    INSERT: new row with effective_from = today, effective_to = NULL, is_active = true
+  WHEN MATCHED AND business values changed:
+    UPDATE old row: effective_to = today, is_active = false
+    INSERT new row: effective_from = today, effective_to = NULL, is_active = true
+
+  WHEN MATCHED AND no change:
+    skip (idempotent — no duplicate insert)
 
   WHEN NOT MATCHED:
-    INSERT: new row with effective_from = today, is_active = true
+    INSERT: effective_from = today, effective_to = NULL, is_active = true
          │
          ▼
-Period aggregations → silver.o9_forecast_period_agg
+Aggregations:
   GROUP BY (category, region, period, _frequency)
   SUM(forecast_qty), SUM(revenue_amount)
+  → append to hpe_catalog.silver.o9_forecast_period_agg
          │
          ▼
 Write to hpe_catalog.audit.job_log:
-  layer='silver', records_inserted=<new rows>, records_updated=<updated rows>
+  layer='silver', records_inserted=new rows,
+  records_updated=SCD2 updates, status=SUCCESS/FAILED
 ```
 
 ### 2.4 Gold Flow (03_silver_to_gold) — Target Design
