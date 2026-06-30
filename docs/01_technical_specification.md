@@ -286,13 +286,229 @@ No credentials are hard-coded anywhere in notebooks, pipelines, or linked servic
 
 ---
 
-## 9. Planned Enhancements (Phase 2)
+## 9. Implementation Gaps & Target Design
 
-| Item | Description |
-|---|---|
-| Parameterized ADF trigger | Single trigger with `frequency` parameter replacing 4 separate triggers |
-| SCD Type 2 in Silver | Delta MERGE-based history tracking for product, customer, location, forecast dimensions |
-| Periodic fact table | Append-only Gold fact table; no overwrite of historical periods |
-| Bronze quarantine | Route DQ failures to `bronze.quarantine` instead of dropping |
-| Job tracking Delta table | Replace `audit.pipeline_audit` (Azure SQL) with `hpe_catalog.audit.job_log` (Delta, Unity Catalog). Columns: `batch_id`, `insert_time`, `records_inserted`, `records_updated`, `status`, `layer`. Governed by UC access control alongside all other tables. |
-| `00_config` notebook | Create missing shared config notebook (catalog name, storage paths, batch ID generation) |
+This section documents what the current code does vs what it must do. All items below are **required implementation changes** — not optional enhancements.
+
+---
+
+### 9.1 Landing Zone
+
+| Aspect | Current (Code) | Target (Plan) |
+|---|---|---|
+| File format | CSV (pipe-delimited) | **Parquet** with timestamp in filename |
+| ADF sink dataset | `ds_landing_csv` (DelimitedText) | `ds_adls_parquet` (Parquet) |
+| Salesforce row limit | `LIMIT 200` hard-coded in SOQL | Remove limit — full extract |
+
+**Changes required:**
+- ADF: Switch all 3 Copy activity sinks from `ds_landing_csv` → `ds_adls_parquet`
+- ADF: Remove `LIMIT 200` from Salesforce SOQL query
+- Bronze notebook: Change `spark.read.format("csv")` → `spark.read.format("parquet")`
+- Bronze notebook: Update `_source_batch_nr` regex (currently matches `_(\d{12})\.csv$`)
+
+---
+
+### 9.2 Bronze Zone
+
+| Aspect | Current (Code) | Target (Plan) |
+|---|---|---|
+| `insert_time` per row | `_ingestion_ts = current_timestamp()` ✅ | ✅ Already correct |
+| Column standardization | None — raw copy only | UPPER(category), TRIM all strings, align column names across sources |
+| PK null check | In Silver notebook (wrong layer) | Move to Bronze — route bad rows to quarantine |
+| Deduplication | Not done | Exact duplicate drop in Bronze before writing Delta |
+| Quarantine table | Does not exist | `hpe_catalog.bronze.quarantine` — receives all DQ-failed rows |
+| Success/failure status | Writes to Azure SQL `pipeline_audit` | Write to `hpe_catalog.audit.job_log` (Delta, Unity Catalog) |
+| Write mode | `overwrite` | `overwrite` with `replaceWhere` on `_frequency + _ingestion_date` |
+
+**Bronze target flow:**
+```
+Read Parquet from landing/
+    │
+    ├── Add audit cols (_ingestion_ts, _batch_id, _frequency, _file_name ...)
+    ├── TRIM all string columns
+    ├── UPPER(category)
+    │
+    ├── PK null check (product_id, location_id, forecast_date)
+    │   ├── Valid   → deduplicate → write to bronze.o9_forecast_raw (Delta)
+    │   └── Invalid → write to bronze.quarantine (Delta)
+    │
+    └── Write status to hpe_catalog.audit.job_log
+```
+
+**DDL addition required — `01_bronze_schema.sql`:**
+```sql
+CREATE TABLE IF NOT EXISTS hpe_catalog.bronze.quarantine (
+    -- all source columns as STRING
+    product_id      STRING, location_id STRING, forecast_date STRING,
+    forecast_qty    STRING, revenue_amount STRING, customer_id STRING,
+    channel STRING, category STRING, sub_category STRING,
+    region STRING, country STRING, currency STRING, uom STRING,
+    -- audit cols
+    _file_name      STRING,
+    _ingestion_ts   TIMESTAMP,
+    _batch_id       STRING,
+    _frequency      STRING,
+    _dq_fail_reason STRING  COMMENT 'Why this row was quarantined'
+)
+USING DELTA
+COMMENT 'Bronze quarantine: rows that failed PK null check or type validation';
+```
+
+---
+
+### 9.3 Silver Zone
+
+| Aspect | Current (Code) | Target (Plan) |
+|---|---|---|
+| SCD Type 2 | Not implemented — simple `append` write | Delta MERGE on product, customer, location, forecast with `effective_from`, `effective_to`, `is_active` |
+| Aggregations | None | Period-level aggregations written to silver agg table |
+| Business logic | Empty string → NULL only | Currency allowlist validation, category allowlist validation, case standardization |
+| Deduplication | Not in Silver | Moved to Bronze (see 9.2) |
+| Schema — SCD2 cols | Missing from `02_silver_schema.sql` | Add `effective_from DATE`, `effective_to DATE`, `is_active BOOLEAN` |
+
+**SCD Type 2 logic (target):**
+```
+For each incoming Silver row:
+  MATCH on (product_id, location_id, forecast_date, _frequency)
+  IF matched AND values changed:
+    UPDATE existing row: set effective_to = today, is_active = false
+    INSERT new row:      set effective_from = today, effective_to = NULL, is_active = true
+  IF matched AND no change:
+    skip (idempotent)
+  IF no match:
+    INSERT new row: effective_from = today, effective_to = NULL, is_active = true
+```
+
+**Business logic rules:**
+```python
+VALID_CATEGORIES = ['SERVER','STORAGE','COMPUTE','NETWORKING',
+                    'PRIVATE_CLOUD','SUPERCOMPUTING','AI']
+VALID_CURRENCIES = ['USD','EUR','GBP','JPY','INR','SGD','AED','BRL']
+
+# Rows failing these → flagged in audit.data_quality_log, not quarantined
+# (NULL category/currency is allowed; WRONG value is flagged)
+```
+
+**Schema additions required — `02_silver_schema.sql`:**
+```sql
+effective_from   DATE     COMMENT 'SCD2: record valid from this date',
+effective_to     DATE     COMMENT 'SCD2: record valid until this date (NULL = current)',
+is_active        BOOLEAN  COMMENT 'SCD2: true = current version of the record'
+```
+
+---
+
+### 9.4 Gold Zone
+
+| Aspect | Current (Code) | Target (Plan) |
+|---|---|---|
+| Write mode | `mode("overwrite")` — destroys all history | MERGE — append new periods, never overwrite past periods |
+| Periodic fact table | Single table `o9_forecast_dmnsn` used as both fact + dim | Separate `fact_o9_forecast` + `dim_product` / `dim_location` / `dim_time` |
+| Dim table population | DDL exists, **no notebook populates them** | Notebook 03 must MERGE-populate all 3 dim tables |
+| Archive tables | Does not exist | Archive processed Silver partitions after Gold load |
+| KPI filter | `_ingestion_ts = today` — breaks on reruns | Filter by `_batch_id` instead |
+| Dead code bug | Lines 65–76 in `03_silver_to_gold.py`: dangling `.partitionBy("period")` chain never calls `.saveAsTable()` — table written twice | Remove lines 65–76 entirely |
+
+**Gold target flow:**
+```
+Read Silver (is_active = true, current batch)
+    │
+    ├── Populate dim_product  (SCD2 MERGE on product_id + category + sub_category)
+    ├── Populate dim_location (SCD2 MERGE on location_id + country + region)
+    ├── Populate dim_time     (INSERT missing date_keys for all forecast_dates)
+    │
+    ├── Build fact rows (join silver → dim keys)
+    │
+    ├── MERGE into fact_o9_forecast
+    │   MATCH on (product_key, location_key, time_key, channel, _frequency)
+    │   INSERT new — never UPDATE past periods
+    │
+    ├── Archive Silver partition → archive/silver/<period>/
+    │
+    └── Write status to hpe_catalog.audit.job_log
+```
+
+**DDL additions required — `03_gold_schema.sql`:**
+```sql
+-- Rename existing o9_forecast_dmnsn → fact_o9_forecast
+-- Add surrogate keys to dim tables
+-- Add archive table
+CREATE TABLE IF NOT EXISTS hpe_catalog.gold.archive_o9_forecast (
+    -- same schema as fact_o9_forecast
+    -- partitioned by (period, _frequency)
+    _archived_ts  TIMESTAMP COMMENT 'When this partition was archived'
+)
+USING DELTA
+COMMENT 'Gold archive: historical fact partitions moved after retention period';
+```
+
+---
+
+### 9.5 Audit / Job Tracking
+
+| Aspect | Current (Code) | Target (Plan) |
+|---|---|---|
+| Store | Azure SQL `audit.pipeline_audit` | `hpe_catalog.audit.job_log` (Delta, Unity Catalog) |
+| Columns | `target_row_count` (no insert/update split) | `records_inserted` + `records_updated` separately |
+| DQ log store | Azure SQL `audit.data_quality_log` | `hpe_catalog.audit.data_quality_log` (Delta) |
+
+**Target schema — `hpe_catalog.audit.job_log`:**
+```sql
+CREATE TABLE IF NOT EXISTS hpe_catalog.audit.job_log (
+    batch_id          STRING    NOT NULL,
+    insert_time       TIMESTAMP NOT NULL,
+    layer             STRING    COMMENT 'bronze / silver / gold / agg_audit',
+    status            STRING    COMMENT 'SUCCESS / FAILED',
+    records_inserted  BIGINT,
+    records_updated   BIGINT,
+    source_system     STRING,
+    data_subject      STRING,
+    error_message     STRING
+)
+USING DELTA
+COMMENT 'Unified job tracking log — replaces Azure SQL pipeline_audit';
+```
+
+---
+
+### 9.6 Missing `00_config` Notebook
+
+Every notebook calls `%run ./00_config` but this file **does not exist** in the repo. This is a hard blocker — nothing runs without it.
+
+**Must contain:**
+```python
+# Catalog and schema references
+CATALOG         = "hpe_catalog"
+BRONZE_SCHEMA   = f"{CATALOG}.bronze"
+SILVER_SCHEMA   = f"{CATALOG}.silver"
+GOLD_SCHEMA     = f"{CATALOG}.gold"
+AUDIT_SCHEMA    = f"{CATALOG}.audit"
+
+# ADLS paths
+CONTAINER_LANDING = "landing"
+CONTAINER_ARCHIVE = "archive"
+
+# Helper functions
+def get_batch_id(prefix): ...       # UUID-based batch ID
+def get_timestamp(fmt): ...         # formatted timestamp
+def get_pipeline_metadata(data_subject): ...  # reads audit.pipeline_metadata
+def get_adls_path(container, path): ...       # builds abfss:// path
+
+# Spark config
+spark.sql(f"USE CATALOG {CATALOG}")
+```
+
+---
+
+### 9.7 Implementation Priority Order
+
+```
+1. 00_config notebook          ← blocker for everything
+2. Landing → Parquet           ← ADF sink change + Bronze read change
+3. Bronze redesign             ← standardize + PK check + dedup + quarantine
+4. Audit → Unity Catalog       ← job_log Delta table replaces Azure SQL
+5. Silver → SCD Type 2         ← Delta MERGE + schema additions
+6. Gold → periodic fact        ← MERGE write + dim population + archive
+7. Fix Salesforce LIMIT 200    ← ADF pipeline fix
+8. Fix Gold dead code bug      ← remove lines 65-76 in notebook 03
+```

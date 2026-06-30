@@ -94,28 +94,29 @@
 
 ### 2.1 Extraction Flow (pl_extract_to_landing)
 
+> **Target state** — current code uses CSV sink and has `LIMIT 200` on Salesforce. Both must be fixed.
+
 ```
 ADF reads audit.source_extract_metadata
          │
          ├── Row: SAP_HANA / FORECAST_VIEW / incremental / CHANGED_ON
          │   └── Copy: SELECT * FROM O9_SOURCE.FORECAST_VIEW
          │             WHERE CHANGED_ON > '<last_watermark>'
-         │             → landing/o9/daily/<timestamp>.csv
+         │             → landing/o9/daily/<timestamp>.parquet   ← Parquet (target)
          │
          ├── Row: SQL_SERVER / Forecast / incremental / modified_dt
          │   └── Copy: SELECT * FROM dbo.Forecast
          │             WHERE modified_dt > '<last_watermark>'
-         │             → landing/o9/weekly/<timestamp>.csv
+         │             → landing/o9/weekly/<timestamp>.parquet
          │
          ├── Row: SALESFORCE / Forecast__c / full / (none)
-         │   └── Copy: SELECT all fields FROM Forecast__c
-         │             WHERE Period_Type__c = 'MONTHLY'
-         │             → landing/o9/monthly/<timestamp>.csv
+         │   └── Copy: SELECT FIELDS(ALL) FROM Forecast__c
+         │             (no LIMIT — current LIMIT 200 bug must be removed)
+         │             → landing/o9/monthly/<timestamp>.parquet
          │
          └── Row: SALESFORCE / Forecast__c / full / (none)
-             └── Copy: SELECT all fields FROM Forecast__c
-                       WHERE Period_Type__c = 'QUARTERLY'
-                       → landing/o9/quarterly/<timestamp>.csv
+             └── Copy: SELECT FIELDS(ALL) FROM Forecast__c
+                       → landing/o9/quarterly/<timestamp>.parquet
          │
          ▼
   Update watermark in audit.source_extract_metadata (incremental only)
@@ -124,44 +125,62 @@ ADF reads audit.source_extract_metadata
   Execute pl_master_etl_pipeline (one call per data_subject)
 ```
 
-### 2.2 Bronze Flow (01_ingest_to_bronze)
+### 2.2 Bronze Flow (01_ingest_to_bronze) — Target Design
+
+> **Current code issues:** reads CSV (not Parquet), no column standardization, no dedup, no quarantine, PK null check is missing (it's in Silver), audit writes to Azure SQL not Unity Catalog.
 
 ```
-Read CSV from landing/o9/<frequency>/
-(spark.read.format("csv"), pipe delimiter, header=true, all columns STRING)
+Read Parquet from landing/o9/<frequency>/
+(spark.read.format("parquet"), all columns as STRING, schema-on-read)
          │
          ▼
 Add audit columns:
-  _file_name        = source filename
-  _ingestion_ts     = current timestamp
-  _frequency        = daily / weekly / monthly / quarterly
-  _batch_id         = UUID from ADF parameter
-  _source_batch_nr  = sequence number
-  _load_job_nr      = run counter
+  _file_name    = source filename
+  _ingestion_ts = current_timestamp()   ← insert_time per row
+  _frequency    = daily/weekly/monthly/quarterly
+  _batch_id     = UUID from ADF parameter
+  _load_job_nr  = YYYYMMDDHHmmss
+         │
+         ▼
+Standardize columns (Bronze is the first cleanse point):
+  TRIM all string columns
+  UPPER(category)
+  align column names to common schema across HANA / SQL Server / Salesforce
+         │
+         ▼
+PK null check (product_id, location_id, forecast_date):
+  ├── Valid rows   → dedup → write to hpe_catalog.bronze.o9_forecast_raw (Delta)
+  └── Invalid rows → write to hpe_catalog.bronze.quarantine (Delta)
+                     with _dq_fail_reason = 'NULL_PK'
+         │
+Deduplication on valid rows:
+  ROW_NUMBER() OVER (PARTITION BY product_id, location_id, forecast_date, _frequency
+                     ORDER BY _ingestion_ts DESC)
+  Keep row_num = 1, drop rest
          │
          ▼
 Write to hpe_catalog.bronze.o9_forecast_raw
-(Delta, mode=overwrite, replaceWhere on _frequency + _ingestion_date)
-         │
-         ├── DQ: PK null check (product_id, location_id, forecast_date)
-         │   ├── Valid rows   → bronze table
-         │   └── Invalid rows → hpe_catalog.bronze.quarantine
+(Delta, replaceWhere on _frequency AND date(_ingestion_ts) = today)
          │
          ▼
-Archive source CSV → archive/<frequency>/<timestamp>/
+Archive source Parquet → archive/<frequency>/<timestamp>/
          │
          ▼
-Write audit entry → audit.pipeline_audit (status=SUCCESS/FAILED)
+Write to hpe_catalog.audit.job_log (Delta):
+  batch_id, insert_time, layer='bronze', status='SUCCESS'/'FAILED',
+  records_inserted=valid_count, records_updated=0
 ```
 
-### 2.3 Silver Flow (02_bronze_to_silver)
+### 2.3 Silver Flow (02_bronze_to_silver) — Target Design
+
+> **Current code issues:** PK check done here (should be Bronze), no SCD2, no business rule validation, no aggregations, appends without dedup, audit writes to Azure SQL.
 
 ```
 Read hpe_catalog.bronze.o9_forecast_raw
-WHERE _batch_id = current batch
+WHERE _batch_id = current_batch_id AND _dq_fail_reason IS NULL
          │
          ▼
-Null/empty string cleansing (all STRING columns)
+Empty string → NULL cleansing (all STRING columns)
          │
          ▼
 Type casting:
@@ -170,82 +189,85 @@ Type casting:
   revenue_amount → DECIMAL(16,2)
          │
          ▼
-PK null filter:
-  Valid   → continue
-  Invalid → log to audit.data_quality_log
+Business rule validation (flag, don't drop):
+  currency IN ('USD','EUR','GBP','JPY','INR','SGD','AED','BRL')
+  category IN ('SERVER','STORAGE','COMPUTE','NETWORKING',
+               'PRIVATE_CLOUD','SUPERCOMPUTING','AI')
+  forecast_qty > 0
+  → log failures to hpe_catalog.audit.data_quality_log
          │
          ▼
-Deduplication:
-  Window: ROW_NUMBER() OVER (PARTITION BY product_id, location_id,
-           forecast_date, _frequency ORDER BY _ingestion_ts DESC)
-  Keep:  row_num = 1
-  Drop:  row_num > 1
+SCD Type 2 MERGE into hpe_catalog.silver.o9_forecast_ref:
+  MATCH on (product_id, location_id, forecast_date, _frequency)
+
+  WHEN MATCHED AND values changed:
+    UPDATE: effective_to = today, is_active = false
+    INSERT: new row with effective_from = today, effective_to = NULL, is_active = true
+
+  WHEN NOT MATCHED:
+    INSERT: new row with effective_from = today, is_active = true
          │
          ▼
-Business rule validation:
-  forecast_qty   > 0
-  currency_code  IN ('USD','EUR','GBP','JPY','INR',...)
-  category       IN ('SERVER','STORAGE','COMPUTE','NETWORKING',
-                     'PRIVATE_CLOUD','SUPERCOMPUTING','AI')
+Period aggregations → silver.o9_forecast_period_agg
+  GROUP BY (category, region, period, _frequency)
+  SUM(forecast_qty), SUM(revenue_amount)
          │
          ▼
-SCD Type 2 MERGE on dimension entities:
-  dim_product:  key = product_id + category + sub_category
-  dim_customer: key = customer_id + region
-  dim_location: key = location_id + country
-  (set effective_to, is_active=false on changed records; insert new version)
-         │
-         ▼
-Append to hpe_catalog.silver.o9_forecast_ref
-(Delta, mode=append, partitioned by _ingestion_date)
-         │
-         ▼
-Write audit entry → audit.pipeline_audit
+Write to hpe_catalog.audit.job_log:
+  layer='silver', records_inserted=<new rows>, records_updated=<updated rows>
 ```
 
-### 2.4 Gold Flow (03_silver_to_gold)
+### 2.4 Gold Flow (03_silver_to_gold) — Target Design
+
+> **Current code issues:** `mode("overwrite")` destroys history, dim tables never populated, dead code bug (dangling write at lines 65–76), archive logic missing, KPI filter uses date instead of batch_id.
 
 ```
 Read hpe_catalog.silver.o9_forecast_ref
-WHERE _ingestion_date = current run date
+WHERE is_active = true AND _batch_id = current_batch_id
          │
          ▼
-Derive period column:
-  if apply_concat=true → YYYY-MM-01 (from forecast_date parts)
-  else                 → pass through forecast_date
+Derive period: YYYY-MM-01 from forecast_date
          │
          ▼
-Populate dimension tables (SCD Type 2 merge):
-  dim_product  → from silver category / sub_category
-  dim_location → from silver region / country
-  dim_time     → derive quarter, fiscal_year from period
+Populate dimension tables (SCD Type 2 MERGE):
+  dim_product:  MERGE on product_id — track category/sub_category changes
+  dim_location: MERGE on location_id — track region/country changes
+  dim_time:     INSERT missing date_keys derived from forecast_date
          │
          ▼
-Load periodic fact table (hpe_catalog.gold.o9_forecast_dmnsn):
-  MERGE on (product_key, location_key, time_key, channel, _frequency)
-  INSERT new period records (never overwrite historical periods)
+Build fact rows: join silver → surrogate keys from dims
          │
          ▼
-Archive processed Silver partitions → archive/silver/<period>/
+MERGE into hpe_catalog.gold.fact_o9_forecast:
+  MATCH on (product_key, location_key, time_key, channel, _frequency)
+  WHEN NOT MATCHED → INSERT   (new period record)
+  WHEN MATCHED     → no update (historical periods are immutable)
          │
          ▼
-Write audit entry → audit.pipeline_audit
+Archive Silver partition → archive/silver/<period>/
+  (move processed _ingestion_date partition after Gold load)
+         │
+         ▼
+Write to hpe_catalog.audit.job_log:
+  layer='gold', records_inserted=<new fact rows>, records_updated=0
 ```
 
-### 2.5 KPI Aggregation (04_aggregated_audit)
+### 2.5 KPI Aggregation (04_aggregated_audit) — Target Design
+
+> **Current code issue:** filters `_gold_load_ts = today` — breaks on reruns. Must filter by `_batch_id` instead.
 
 ```
-Read hpe_catalog.gold.o9_forecast_dmnsn
-WHERE _gold_load_ts = today
+Read hpe_catalog.gold.fact_o9_forecast
+WHERE _batch_id = current_batch_id   ← use batch_id not date
          │
          ▼
-GROUP BY _file_name, period, category, region
+GROUP BY period, category, region, _frequency
 SUM(forecast_qty), SUM(revenue_amount)
          │
          ▼
 Transpose (stack):
-  (file_name, keyfigure='forecast_qty',   total_qty_amount=SUM(forecast_qty))
-  (file_name, keyfigure='revenue_amount', total_qty_amount=SUM(revenue_amount))
+  (period, category, region, keyfigure='forecast_qty',   total=SUM(forecast_qty))
+  (period, category, region, keyfigure='revenue_amount', total=SUM(revenue_amount))
          │
          ▼
 Append to hpe_catalog.gold.o9_forecast_agg_audit

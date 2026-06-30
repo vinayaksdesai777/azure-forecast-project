@@ -224,3 +224,136 @@ Run with:
 ```bash
 pytest tests/test_data_quality.py -v
 ```
+
+---
+
+## 8. Gap-Specific Test Cases
+
+Tests that must pass once the implementation gaps (from Technical Spec Section 9) are resolved. These do not pass today — they define the acceptance criteria for each fix.
+
+---
+
+### 8.1 Landing — Parquet Format
+
+| Test ID | Test | Expected |
+|---|---|---|
+| GAP-L01 | After extraction run, check file extension in `landing/o9/daily/` | Files end in `.parquet`, not `.csv` |
+| GAP-L02 | Read landing file with `spark.read.parquet(path)` | Loads without error, correct column count |
+| GAP-L03 | Salesforce full extract row count | `landing/o9/monthly/` file has 9,800 rows (not 200) |
+
+```python
+# GAP-L03 verification
+df = spark.read.parquet("abfss://landing@<account>.dfs.core.windows.net/o9/monthly/")
+assert df.count() == 9800, f"Expected 9800, got {df.count()} — LIMIT 200 bug still present"
+```
+
+---
+
+### 8.2 Bronze — Standardization, PK Check, Dedup, Quarantine
+
+| Test ID | Test | Expected |
+|---|---|---|
+| GAP-B01 | After Bronze run, check `category` column | All values uppercase — no `'server'`, `'Storage'` etc. |
+| GAP-B02 | Check `bronze.quarantine` row count | Equals rows with NULL product_id OR location_id OR forecast_date in source |
+| GAP-B03 | Check `bronze.o9_forecast_raw` has no NULL PKs | `SELECT COUNT(*) WHERE product_id IS NULL` = 0 |
+| GAP-B04 | Check `bronze.o9_forecast_raw` has no exact duplicates | `GROUP BY all source cols HAVING COUNT(*) > 1` = 0 rows |
+| GAP-B05 | Quarantine rows have `_dq_fail_reason` populated | `SELECT DISTINCT _dq_fail_reason FROM bronze.quarantine` shows 'NULL_PK' |
+| GAP-B06 | Audit log written to UC not Azure SQL | `SELECT * FROM hpe_catalog.audit.job_log WHERE layer='bronze'` returns rows |
+
+```sql
+-- GAP-B01
+SELECT COUNT(*) FROM hpe_catalog.bronze.o9_forecast_raw
+WHERE category != UPPER(category);
+-- Expected: 0
+
+-- GAP-B04
+SELECT product_id, location_id, forecast_date, _frequency, COUNT(*) as cnt
+FROM hpe_catalog.bronze.o9_forecast_raw
+GROUP BY product_id, location_id, forecast_date, _frequency
+HAVING COUNT(*) > 1;
+-- Expected: 0 rows
+```
+
+---
+
+### 8.3 Silver — SCD Type 2
+
+| Test ID | Test | Expected |
+|---|---|---|
+| GAP-S01 | Silver schema has SCD2 columns | `DESCRIBE hpe_catalog.silver.o9_forecast_ref` shows `effective_from`, `effective_to`, `is_active` |
+| GAP-S02 | New record insert | `is_active=true`, `effective_from=today`, `effective_to=NULL` |
+| GAP-S03 | Changed record (category updated) | Old row: `is_active=false`, `effective_to=today`. New row: `is_active=true`, `effective_from=today` |
+| GAP-S04 | Unchanged record re-ingested | Only 1 active row — no duplicate insert |
+| GAP-S05 | `records_updated` in job_log > 0 after SCD2 merge with changes | `SELECT records_updated FROM hpe_catalog.audit.job_log WHERE layer='silver'` > 0 |
+
+```sql
+-- GAP-S03: verify SCD2 history for a changed product
+SELECT product_id, category, effective_from, effective_to, is_active
+FROM hpe_catalog.silver.o9_forecast_ref
+WHERE product_id = 'HPE-PROD-1234'
+ORDER BY effective_from;
+-- Expected: 2 rows — one with is_active=false, one with is_active=true
+```
+
+---
+
+### 8.4 Gold — Periodic Fact, Dim Population, Archive
+
+| Test ID | Test | Expected |
+|---|---|---|
+| GAP-G01 | Gold uses MERGE not overwrite | Run Gold twice on same Silver data — fact row count unchanged (no duplicates) |
+| GAP-G02 | Historical periods not overwritten | Manually check a past period after a new run — old rows unchanged |
+| GAP-G03 | `dim_product` populated | `SELECT COUNT(*) FROM hpe_catalog.gold.dim_product` > 0 |
+| GAP-G04 | `dim_location` populated | `SELECT COUNT(*) FROM hpe_catalog.gold.dim_location` > 0 |
+| GAP-G05 | `dim_time` populated | `SELECT COUNT(*) FROM hpe_catalog.gold.dim_time` > 0 |
+| GAP-G06 | Archive table populated after Gold run | `SELECT COUNT(*) FROM hpe_catalog.gold.archive_o9_forecast` > 0 |
+| GAP-G07 | Dead code bug fixed | `03_silver_to_gold.py` has no dangling write chain before the conditional block |
+
+```sql
+-- GAP-G01: idempotency check
+-- Run Gold → note fact count
+-- Run Gold again with same batch
+-- Fact count must be identical
+SELECT COUNT(*) FROM hpe_catalog.gold.fact_o9_forecast WHERE period = '2025-01-01';
+-- Both runs: same number
+```
+
+---
+
+### 8.5 Audit — Unity Catalog job_log
+
+| Test ID | Test | Expected |
+|---|---|---|
+| GAP-A01 | job_log table exists in Unity Catalog | `SHOW TABLES IN hpe_catalog.audit` includes `job_log` |
+| GAP-A02 | job_log has correct columns | `DESCRIBE hpe_catalog.audit.job_log` shows `records_inserted`, `records_updated` |
+| GAP-A03 | After full pipeline run, 4 rows in job_log | One per layer: bronze, silver, gold, agg_audit |
+| GAP-A04 | SCD2 merge populates `records_updated` correctly | Silver row shows `records_updated > 0` when changes detected |
+| GAP-A05 | Azure SQL `pipeline_audit` no longer written | After implementation, verify no new rows in `audit.pipeline_audit` |
+
+---
+
+### 8.6 `00_config` Notebook
+
+| Test ID | Test | Expected |
+|---|---|---|
+| GAP-C01 | File exists at `databricks/notebooks/00_config.py` | File present in repo |
+| GAP-C02 | `get_batch_id()` returns unique UUID per call | Two calls return different values |
+| GAP-C03 | `get_pipeline_metadata()` returns dict for valid data_subject | Returns metadata for `o9_forecast_daily` |
+| GAP-C04 | `spark.sql("USE CATALOG hpe_catalog")` runs without error | No `CatalogNotFoundException` |
+| GAP-C05 | All 4 notebooks run without `ModuleNotFoundError` on `%run ./00_config` | Clean run of each notebook |
+
+---
+
+### 8.7 Gap Test Summary
+
+| Layer | Tests | Passes today |
+|---|---|---|
+| Landing (Parquet) | GAP-L01 to GAP-L03 | ❌ 0/3 |
+| Bronze (standardize + quarantine) | GAP-B01 to GAP-B06 | ❌ 0/6 |
+| Silver (SCD Type 2) | GAP-S01 to GAP-S05 | ❌ 0/5 |
+| Gold (periodic fact + dims + archive) | GAP-G01 to GAP-G07 | ❌ 0/7 |
+| Audit (Unity Catalog job_log) | GAP-A01 to GAP-A05 | ❌ 0/5 |
+| 00_config notebook | GAP-C01 to GAP-C05 | ❌ 0/5 |
+| **Total** | **31 tests** | **0 pass today** |
+
+All 31 gap tests passing = implementation complete.
