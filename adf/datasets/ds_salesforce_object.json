@@ -1,0 +1,25 @@
+{
+    "name": "ds_salesforce_object",
+    "type": "Microsoft.DataFactory/factories/datasets",
+    "properties": {
+        "linkedServiceName": {
+            "referenceName": "ls_salesforce",
+            "type": "LinkedServiceReference"
+        },
+        "parameters": {
+            "objectApiName": {
+                "type": "string"
+            }
+        },
+        "type": "SalesforceObject",
+        "schema": [],
+        "typeProperties": {
+            "objectApiName": {
+                "value": "@dataset().objectApiName",
+                "type": "Expression"
+            }
+        },
+        "annotations": [],
+        "description": "Parameterized Salesforce object source. The Copy activity supplies a SOQL query (use Bulk API 2.0 for high volume)."
+    }
+}

@@ -1,0 +1,29 @@
+{
+    "name": "ls_salesforce",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "Salesforce",
+        "typeProperties": {
+            "environmentUrl": "https://login.salesforce.com",
+            "username": "<salesforce_user>",
+            "password": {
+                "type": "AzureKeyVaultSecret",
+                "store": {
+                    "referenceName": "ls_keyvault",
+                    "type": "LinkedServiceReference"
+                },
+                "secretName": "salesforce-password"
+            },
+            "securityToken": {
+                "type": "AzureKeyVaultSecret",
+                "store": {
+                    "referenceName": "ls_keyvault",
+                    "type": "LinkedServiceReference"
+                },
+                "secretName": "salesforce-security-token"
+            }
+        },
+        "annotations": [],
+        "description": "Salesforce source (SaaS, public internet) — uses the Azure AutoResolve IR, no SHIR needed. Query objects with SOQL; use Salesforce Bulk API 2.0 for >1M rows."
+    }
+}

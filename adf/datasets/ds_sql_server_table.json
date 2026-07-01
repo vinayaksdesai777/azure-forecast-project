@@ -1,0 +1,33 @@
+{
+    "name": "ds_sql_server_table",
+    "type": "Microsoft.DataFactory/factories/datasets",
+    "properties": {
+        "linkedServiceName": {
+            "referenceName": "ls_sql_server",
+            "type": "LinkedServiceReference"
+        },
+        "parameters": {
+            "schemaName": {
+                "type": "string",
+                "defaultValue": "dbo"
+            },
+            "tableName": {
+                "type": "string"
+            }
+        },
+        "type": "SqlServerTable",
+        "schema": [],
+        "typeProperties": {
+            "schema": {
+                "value": "@dataset().schemaName",
+                "type": "Expression"
+            },
+            "table": {
+                "value": "@dataset().tableName",
+                "type": "Expression"
+            }
+        },
+        "annotations": [],
+        "description": "Parameterized SQL Server table source. The Copy activity supplies a sqlReaderQuery for incremental watermark pulls."
+    }
+}

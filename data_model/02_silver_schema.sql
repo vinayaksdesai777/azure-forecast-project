@@ -25,7 +25,12 @@ CREATE TABLE IF NOT EXISTS hpe_catalog.silver.o9_forecast_ref (
     
     -- Frequency / classification column
     _frequency          STRING      NOT NULL    COMMENT 'Data frequency: daily, weekly, monthly, quarterly',
-    
+
+    -- SCD Type 2 tracking columns
+    effective_from      DATE                    COMMENT 'Date this version became active',
+    effective_to        DATE                    COMMENT 'Date this version expired (NULL = current)',
+    is_active           BOOLEAN     DEFAULT TRUE COMMENT 'TRUE = current active version',
+
     -- Operational / Audit columns
     _file_name          STRING      COMMENT 'Source file name',
     _ingestion_ts       TIMESTAMP   COMMENT 'Original ingestion timestamp',
@@ -46,3 +51,26 @@ TBLPROPERTIES (
 
 -- Optimize for common query patterns
 -- OPTIMIZE hpe_catalog.silver.o9_forecast_ref ZORDER BY (product_id, location_id, forecast_date);
+
+-- ============================================================
+-- Period aggregation table: pre-rolled-up metrics by period
+-- Written by 02_bronze_to_silver.py and consumed by Gold layer
+-- ============================================================
+CREATE TABLE IF NOT EXISTS hpe_catalog.silver.o9_forecast_period_agg (
+    period              STRING      NOT NULL    COMMENT 'First day of month (yyyy-MM-01)',
+    _frequency          STRING      NOT NULL    COMMENT 'daily, weekly, monthly, quarterly',
+    category            STRING                  COMMENT 'Product category',
+    region              STRING                  COMMENT 'Geographic region',
+    source_system       STRING                  COMMENT 'SAP_HANA / SQL_SERVER / SALESFORCE',
+    total_forecast_qty  DECIMAL(18,4)           COMMENT 'Sum of forecast_qty for the period',
+    total_revenue_amount DECIMAL(18,2)          COMMENT 'Sum of revenue_amount for the period',
+    record_count        BIGINT                  COMMENT 'Number of detail rows aggregated',
+    _batch_id           STRING                  COMMENT 'Pipeline batch identifier',
+    _agg_load_ts        TIMESTAMP               COMMENT 'When this aggregate row was written'
+)
+USING DELTA
+COMMENT 'Silver aggregation: period-level rolled-up forecast KPIs for Gold consumption'
+TBLPROPERTIES (
+    'delta.autoOptimize.optimizeWrite' = 'true',
+    'quality' = 'silver'
+);

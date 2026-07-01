@@ -1,0 +1,321 @@
+{
+    "name": "pl_extract_to_landing",
+    "properties": {
+        "description": "Metadata-driven source extraction stage. Pulls each active source object (SAP HANA / SQL Server / Salesforce) into the landing container as pipe-delimited CSV, matching the contract ds_landing_csv expects, then the existing Bronze>Silver>Gold flow takes over unchanged. Runs before pl_master_etl_pipeline.",
+        "activities": [
+            {
+                "name": "Get Extract Metadata",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.00:05:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 30
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": {
+                            "value": "SELECT source_system, connector, source_schema, source_object, watermark_column, landing_path, load_type, last_watermark, data_subject FROM audit.source_extract_metadata WHERE is_active = 1",
+                            "type": "Expression"
+                        }
+                    },
+                    "dataset": {
+                        "referenceName": "ds_azure_sql_metadata",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "schemaName": "audit",
+                            "tableName": "source_extract_metadata"
+                        }
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "ForEach Source Object",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "Get Extract Metadata",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('Get Extract Metadata').output.value",
+                        "type": "Expression"
+                    },
+                    "isSequential": false,
+                    "batchCount": 4,
+                    "activities": [
+                        {
+                            "name": "Extract Source",
+                            "type": "Switch",
+                            "dependsOn": [],
+                            "typeProperties": {
+                                "on": {
+                                    "value": "@item().connector",
+                                    "type": "Expression"
+                                },
+                                "cases": [
+                                    {
+                                        "value": "SapHana",
+                                        "activities": [
+                                            {
+                                                "name": "Copy SAP HANA to Landing",
+                                                "type": "Copy",
+                                                "dependsOn": [],
+                                                "policy": {
+                                                    "timeout": "0.02:00:00",
+                                                    "retry": 1,
+                                                    "retryIntervalInSeconds": 60
+                                                },
+                                                "typeProperties": {
+                                                    "source": {
+                                                        "type": "SapHanaSource",
+                                                        "query": {
+                                                            "value": "@concat('SELECT * FROM \"', item().source_schema, '\".\"', item().source_object, '\"', if(equals(item().load_type, 'incremental'), concat(' WHERE \"', item().watermark_column, '\" > ''', item().last_watermark, ''''), ''))",
+                                                            "type": "Expression"
+                                                        }
+                                                    },
+                                                    "sink": {
+                                                        "type": "DelimitedTextSink",
+                                                        "storeSettings": {
+                                                            "type": "AzureBlobFSWriteSettings"
+                                                        },
+                                                        "formatSettings": {
+                                                            "type": "DelimitedTextWriteSettings",
+                                                            "fileExtension": ".csv"
+                                                        }
+                                                    },
+                                                    "enableStaging": false
+                                                },
+                                                "inputs": [
+                                                    {
+                                                        "referenceName": "ds_sap_hana_table",
+                                                        "type": "DatasetReference",
+                                                        "parameters": {
+                                                            "schemaName": "@item().source_schema",
+                                                            "tableName": "@item().source_object"
+                                                        }
+                                                    }
+                                                ],
+                                                "outputs": [
+                                                    {
+                                                        "referenceName": "ds_landing_csv",
+                                                        "type": "DatasetReference",
+                                                        "parameters": {
+                                                            "containerName": "landing",
+                                                            "folderPath": "@item().landing_path",
+                                                            "fileName": "@concat(item().data_subject, '_', utcNow('yyyyMMddHHmmss'), '.csv')"
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "value": "SqlServer",
+                                        "activities": [
+                                            {
+                                                "name": "Copy SQL Server to Landing",
+                                                "type": "Copy",
+                                                "dependsOn": [],
+                                                "policy": {
+                                                    "timeout": "0.02:00:00",
+                                                    "retry": 1,
+                                                    "retryIntervalInSeconds": 60
+                                                },
+                                                "typeProperties": {
+                                                    "source": {
+                                                        "type": "SqlServerSource",
+                                                        "sqlReaderQuery": {
+                                                            "value": "@concat('SELECT * FROM [', item().source_schema, '].[', item().source_object, ']', if(equals(item().load_type, 'incremental'), concat(' WHERE [', item().watermark_column, '] > ''', item().last_watermark, ''''), ''))",
+                                                            "type": "Expression"
+                                                        }
+                                                    },
+                                                    "sink": {
+                                                        "type": "DelimitedTextSink",
+                                                        "storeSettings": {
+                                                            "type": "AzureBlobFSWriteSettings"
+                                                        },
+                                                        "formatSettings": {
+                                                            "type": "DelimitedTextWriteSettings",
+                                                            "fileExtension": ".csv"
+                                                        }
+                                                    },
+                                                    "enableStaging": false
+                                                },
+                                                "inputs": [
+                                                    {
+                                                        "referenceName": "ds_sql_server_table",
+                                                        "type": "DatasetReference",
+                                                        "parameters": {
+                                                            "schemaName": "@item().source_schema",
+                                                            "tableName": "@item().source_object"
+                                                        }
+                                                    }
+                                                ],
+                                                "outputs": [
+                                                    {
+                                                        "referenceName": "ds_landing_csv",
+                                                        "type": "DatasetReference",
+                                                        "parameters": {
+                                                            "containerName": "landing",
+                                                            "folderPath": "@item().landing_path",
+                                                            "fileName": "@concat(item().data_subject, '_', utcNow('yyyyMMddHHmmss'), '.csv')"
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "value": "Salesforce",
+                                        "activities": [
+                                            {
+                                                "name": "Copy Salesforce to Landing",
+                                                "type": "Copy",
+                                                "dependsOn": [],
+                                                "policy": {
+                                                    "timeout": "0.02:00:00",
+                                                    "retry": 1,
+                                                    "retryIntervalInSeconds": 60
+                                                },
+                                                "typeProperties": {
+                                                    "source": {
+                                                        "type": "SalesforceSource",
+                                                        "query": {
+                                                            "value": "@concat('SELECT FIELDS(ALL) FROM ', item().source_object, if(equals(item().load_type, 'incremental'), concat(' WHERE ', item().watermark_column, ' > ', item().last_watermark), ''))",
+                                                            "type": "Expression"
+                                                        },
+                                                        "readBehavior": "query"
+                                                    },
+                                                    "sink": {
+                                                        "type": "DelimitedTextSink",
+                                                        "storeSettings": {
+                                                            "type": "AzureBlobFSWriteSettings"
+                                                        },
+                                                        "formatSettings": {
+                                                            "type": "DelimitedTextWriteSettings",
+                                                            "fileExtension": ".csv"
+                                                        }
+                                                    },
+                                                    "enableStaging": false
+                                                },
+                                                "inputs": [
+                                                    {
+                                                        "referenceName": "ds_salesforce_object",
+                                                        "type": "DatasetReference",
+                                                        "parameters": {
+                                                            "objectApiName": "@item().source_object"
+                                                        }
+                                                    }
+                                                ],
+                                                "outputs": [
+                                                    {
+                                                        "referenceName": "ds_landing_csv",
+                                                        "type": "DatasetReference",
+                                                        "parameters": {
+                                                            "containerName": "landing",
+                                                            "folderPath": "@item().landing_path",
+                                                            "fileName": "@concat(item().data_subject, '_', utcNow('yyyyMMddHHmmss'), '.csv')"
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ],
+                                "defaultActivities": [
+                                    {
+                                        "name": "Log Unknown Connector",
+                                        "type": "SqlServerStoredProcedure",
+                                        "typeProperties": {
+                                            "storedProcedureName": "audit.usp_insert_audit",
+                                            "storedProcedureParameters": {
+                                                "batch_id": { "value": "@concat(item().data_subject, '_', utcNow('yyyyMMddHHmmss'))" },
+                                                "application_id": { "value": "@pipeline().RunId" },
+                                                "object_name": { "value": "@item().source_object" },
+                                                "data_layer": { "value": "EXTRACT" },
+                                                "job_status": { "value": "FAILED" },
+                                                "source_system": { "value": "@item().source_system" }
+                                            }
+                                        },
+                                        "linkedServiceName": {
+                                            "referenceName": "ls_azure_sql_audit",
+                                            "type": "LinkedServiceReference"
+                                        }
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "name": "Update Watermark",
+                            "type": "SqlServerStoredProcedure",
+                            "dependsOn": [
+                                {
+                                    "activity": "Extract Source",
+                                    "dependencyConditions": ["Succeeded"]
+                                }
+                            ],
+                            "typeProperties": {
+                                "storedProcedureName": "audit.usp_update_extract_watermark",
+                                "storedProcedureParameters": {
+                                    "source_system": { "value": "@item().source_system" },
+                                    "source_object": { "value": "@item().source_object" },
+                                    "new_watermark": { "value": "@utcNow('yyyy-MM-dd HH:mm:ss')" }
+                                }
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "ls_azure_sql_audit",
+                                "type": "LinkedServiceReference"
+                            }
+                        }
+                    ]
+                }
+            },
+            {
+                "name": "Run Master ETL Pipeline",
+                "type": "ExecutePipeline",
+                "dependsOn": [
+                    {
+                        "activity": "ForEach Source Object",
+                        "dependencyConditions": ["Succeeded"]
+                    }
+                ],
+                "typeProperties": {
+                    "pipeline": {
+                        "referenceName": "pl_master_etl_pipeline",
+                        "type": "PipelineReference"
+                    },
+                    "waitOnCompletion": true,
+                    "parameters": {
+                        "data_subject": {
+                            "value": "@pipeline().parameters.data_subject",
+                            "type": "Expression"
+                        },
+                        "storage_account": {
+                            "value": "@pipeline().parameters.storage_account",
+                            "type": "Expression"
+                        }
+                    }
+                }
+            }
+        ],
+        "parameters": {
+            "data_subject": {
+                "type": "string",
+                "defaultValue": "o9_forecast_daily"
+            },
+            "storage_account": {
+                "type": "string",
+                "defaultValue": "your_adls_storage_account"
+            }
+        },
+        "annotations": ["Extraction", "Source-to-Landing", "Metadata-Driven"],
+        "folder": {
+            "name": "o9_data_pipeline"
+        }
+    }
+}

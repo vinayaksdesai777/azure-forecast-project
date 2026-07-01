@@ -1,0 +1,8 @@
+{
+    "name": "shir-onprem",
+    "type": "Microsoft.DataFactory/factories/integrationruntimes",
+    "properties": {
+        "type": "SelfHosted",
+        "description": "Self-Hosted Integration Runtime for on-prem / private sources (SAP HANA, on-prem SQL Server) that sit behind a corporate firewall. Install the SHIR MSI on a VM with network line-of-sight to those systems and register it with the auth key."
+    }
+}

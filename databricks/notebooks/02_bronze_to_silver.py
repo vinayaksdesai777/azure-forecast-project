@@ -1,9 +1,9 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 02 - Bronze to Silver (Cleansed/Reference Layer)
-# MAGIC 
-# MAGIC Applies data quality checks and loads validated data to Silver Delta table.
-# MAGIC Performs PK null checks, type casting, and empty string cleansing.
+# MAGIC # 02 - Bronze to Silver
+# MAGIC Reads Bronze (pre-cleaned: no NULL PKs, no exact dupes).
+# MAGIC Applies type casting, business logic validation, SCD Type 2 MERGE,
+# MAGIC and period-level aggregations.
 
 # COMMAND ----------
 
@@ -12,41 +12,38 @@
 # COMMAND ----------
 
 from pyspark.sql import functions as F
-from pyspark.sql.types import StringType, StructType
 from delta.tables import DeltaTable
+from utilities.audit_helper import write_audit_entry, mark_audit_failed, log_dq_result
 
 # COMMAND ----------
 
-# Widget parameters (passed from ADF or upstream notebook)
 dbutils.widgets.text("data_subject", "", "Data Subject")
-dbutils.widgets.text("batch_id", "", "Batch ID from Bronze load")
+dbutils.widgets.text("batch_id",     "", "Batch ID from Bronze")
+dbutils.widgets.text("run_id",       "", "ADF Pipeline Run ID")
 
-data_subject = dbutils.widgets.get("data_subject")
+data_subject     = dbutils.widgets.get("data_subject")
 upstream_batch_id = dbutils.widgets.get("batch_id")
+run_id           = dbutils.widgets.get("run_id")
 
 # COMMAND ----------
 
-# Load metadata
-metadata = get_pipeline_metadata(data_subject)
+metadata       = get_pipeline_metadata(data_subject)
+source_system  = metadata["source_system"]
+bronze_table   = metadata["bronze_table"]
+silver_table   = metadata["silver_table"]
+num_partitions = int(metadata.get("num_partitions") or DEFAULT_NUM_PARTITIONS)
 
-bronze_table = metadata["bronze_table"]
-silver_table = metadata["silver_table"]
-null_check_columns = metadata["null_check_columns"]
-delimiter = metadata["delimiter"] or DEFAULT_DELIMITER
-num_partitions = metadata["num_partitions"] or DEFAULT_NUM_PARTITIONS
+batch_id    = get_batch_id(f"silver_{data_subject}")
+load_job_nr = get_timestamp()
 
-batch_id = get_batch_id(f"silver_{data_subject}")
-load_job_nr = get_timestamp("%Y%m%d%H%M%S")
-app_id = spark.sparkContext.applicationId
-
-print(f"Source: {bronze_table}")
-print(f"Target: {silver_table}")
-print(f"Null check columns: {null_check_columns}")
+print(f"Source : {bronze_table}")
+print(f"Target : {silver_table}")
+print(f"batch_id: {batch_id}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Read Bronze Data
+# MAGIC ## Read Bronze (valid rows only — Bronze already guarantees no NULL PKs, no exact dupes)
 
 # COMMAND ----------
 
@@ -55,107 +52,170 @@ src_count = bronze_df.count()
 print(f"Bronze records: {src_count}")
 
 if src_count == 0:
-    print("No data in bronze table. Exiting.")
+    write_audit_entry(spark, batch_id=batch_id, layer="silver", status="SUCCESS",
+                      records_inserted=0, source_system=source_system,
+                      data_subject=data_subject, object_name=silver_table, run_id=run_id)
     dbutils.notebook.exit("NO_DATA")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Data Quality - Null Check on Primary Key Columns
+# MAGIC ## Type Casting + Empty String → NULL
 
 # COMMAND ----------
 
-from utilities.data_quality import validate_not_null, log_dq_results
+from pyspark.sql.types import StringType
 
-valid_df = bronze_df
-error_count = 0
+# Empty string → NULL for all string cols
+typed_df = bronze_df
+for col in [f.name for f in bronze_df.schema.fields if str(f.dataType) == "StringType()"]:
+    typed_df = typed_df.withColumn(col, F.when(F.trim(F.col(col)) == "", None).otherwise(F.col(col)))
 
-if null_check_columns:
-    pk_columns = [col.strip() for col in null_check_columns.split(",")]
-    
-    # Filter: keep only rows where all PK columns are non-null and non-empty
-    null_condition = F.lit(True)
-    for col_name in pk_columns:
-        if col_name in bronze_df.columns:
-            null_condition = null_condition & (
-                F.col(col_name).isNotNull() & 
-                (F.trim(F.col(col_name)) != "")
-            )
-    
-    valid_df = bronze_df.filter(null_condition)
-    invalid_df = bronze_df.filter(~null_condition)
-    
-    error_count = invalid_df.count()
-    valid_count = valid_df.count()
-    
-    print(f"Valid records: {valid_count}")
-    print(f"Invalid records (null PKs): {error_count}")
-    
-    # Log DQ results to Azure SQL
-    log_dq_results(
-        spark=spark,
-        jdbc_url=AUDIT_JDBC_URL,
-        jdbc_properties=AUDIT_JDBC_PROPERTIES,
-        batch_id=batch_id,
-        table_name=silver_table,
-        check_type="NULL_CHECK",
-        column_name=null_check_columns,
-        records_checked=src_count,
-        records_failed=error_count
-    )
-else:
-    valid_count = src_count
-    print("No null check columns configured. Passing all records.")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Cleanse Data - Replace Empty Strings with Null
-
-# COMMAND ----------
-
-# Replace empty strings with null for cleaner downstream analytics
-for col_name in valid_df.columns:
-    if valid_df.schema[col_name].dataType == StringType():
-        valid_df = valid_df.withColumn(
-            col_name,
-            F.when(F.trim(F.col(col_name)) == "", None).otherwise(F.col(col_name))
-        )
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Write to Silver Delta Table
-
-# COMMAND ----------
-
-# Add silver-specific columns
-silver_df = (
-    valid_df
+# Cast to business types
+typed_df = (
+    typed_df
+    .withColumn("forecast_date",   F.to_date("forecast_date"))
+    .withColumn("forecast_qty",    F.col("forecast_qty").cast("decimal(12,2)"))
+    .withColumn("revenue_amount",  F.col("revenue_amount").cast("decimal(16,2)"))
     .withColumn("_ingestion_date", F.current_date())
     .withColumn("_silver_load_ts", F.current_timestamp())
-    .withColumn("_batch_id", F.lit(batch_id))
+    .withColumn("_batch_id",       F.lit(batch_id))
 )
 
-# Drop internal bronze columns not needed in silver
-cols_to_drop = ["_source_batch_nr", "_load_job_nr"]
-existing_drop_cols = [c for c in cols_to_drop if c in silver_df.columns]
-if existing_drop_cols:
-    silver_df = silver_df.drop(*existing_drop_cols)
+# COMMAND ----------
 
-# Write to Silver (append mode for historical accumulation)
+# MAGIC %md
+# MAGIC ## Business Logic Validation (flag violations, do NOT drop rows)
+
+# COMMAND ----------
+
+# Category validation
+invalid_category = typed_df.filter(
+    F.col("category").isNotNull() & ~F.col("category").isin(list(VALID_CATEGORIES))
+)
+cat_fail_count = invalid_category.count()
+
+log_dq_result(spark, batch_id=batch_id, layer="silver",
+              table_name=silver_table, check_type="CATEGORY_VALIDATION",
+              column_name="category",
+              records_checked=src_count, records_failed=cat_fail_count,
+              data_subject=data_subject)
+
+# Currency validation
+invalid_currency = typed_df.filter(
+    F.col("currency").isNotNull() & ~F.col("currency").isin(list(VALID_CURRENCIES))
+)
+curr_fail_count = invalid_currency.count()
+
+log_dq_result(spark, batch_id=batch_id, layer="silver",
+              table_name=silver_table, check_type="CURRENCY_VALIDATION",
+              column_name="currency",
+              records_checked=src_count, records_failed=curr_fail_count,
+              data_subject=data_subject)
+
+print(f"Business validation — invalid category: {cat_fail_count} | invalid currency: {curr_fail_count}")
+print("Flagged rows kept in Silver (not dropped)")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## SCD Type 2 MERGE into Silver
+
+# COMMAND ----------
+
+# SCD2 merge keys
+merge_keys = ["product_id", "location_id", "forecast_date", "_frequency"]
+
+# Columns that trigger a history update when changed
+scd2_cols = ["forecast_qty", "revenue_amount", "customer_id", "channel",
+             "category", "sub_category", "region", "country", "currency", "uom"]
+
+# Add SCD2 columns to incoming data
+new_df = (
+    typed_df
+    .withColumn("effective_from", F.current_date())
+    .withColumn("effective_to",   F.lit(None).cast("date"))
+    .withColumn("is_active",      F.lit(True))
+)
+
+records_inserted = 0
+records_updated  = 0
+
+if not spark.catalog.tableExists(silver_table):
+    # First load — write directly
+    (
+        new_df
+        .repartition(num_partitions)
+        .write.format("delta")
+        .mode("overwrite")
+        .option("overwriteSchema", "true")
+        .partitionBy("_ingestion_date")
+        .saveAsTable(silver_table)
+    )
+    records_inserted = new_df.count()
+    print(f"First load — inserted: {records_inserted}")
+else:
+    silver_dt = DeltaTable.forName(spark, silver_table)
+
+    # Build merge condition on PK cols
+    merge_condition = " AND ".join([f"existing.{k} = incoming.{k}" for k in merge_keys])
+
+    # Build change detection condition across SCD2 tracked columns
+    change_condition = " OR ".join([f"existing.{c} <> incoming.{c}" for c in scd2_cols
+                                    if c in new_df.columns])
+
+    # Step 1 — expire changed active rows
+    silver_dt.alias("existing").merge(
+        new_df.alias("incoming"),
+        f"{merge_condition} AND existing.is_active = true AND ({change_condition})"
+    ).whenMatchedUpdate(set={
+        "effective_to": F.current_date(),
+        "is_active":    F.lit(False)
+    }).execute()
+
+    # Count updated rows (those that got expired)
+    records_updated = spark.table(silver_table).filter(
+        (F.col("is_active") == False) & (F.col("effective_to") == F.current_date())
+    ).count()
+
+    # Step 2 — insert new/changed rows (not matched as active, or changed)
+    silver_dt.alias("existing").merge(
+        new_df.alias("incoming"),
+        f"{merge_condition} AND existing.is_active = true AND NOT ({change_condition})"
+    ).whenNotMatchedInsertAll().execute()
+
+    records_inserted = new_df.count() - records_updated
+    print(f"SCD2 merge — inserted: {records_inserted} | updated (expired): {records_updated}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Period Aggregations → Silver Agg Table
+
+# COMMAND ----------
+
+agg_table = f"{SILVER_SCHEMA}.o9_forecast_period_agg"
+
+period_agg_df = (
+    typed_df
+    .withColumn("period", F.date_format(F.col("forecast_date"), "yyyy-MM-01"))
+    .groupBy("period", "_frequency", "category", "region", "source_system" if "source_system" in typed_df.columns else F.lit(source_system).alias("source_system"))
+    .agg(
+        F.sum("forecast_qty").cast("decimal(18,4)").alias("total_forecast_qty"),
+        F.sum("revenue_amount").cast("decimal(18,2)").alias("total_revenue_amount"),
+        F.count("*").alias("record_count")
+    )
+    .withColumn("_batch_id",    F.lit(batch_id))
+    .withColumn("_agg_load_ts", F.current_timestamp())
+)
+
 (
-    silver_df
-    .repartition(num_partitions)
-    .write
-    .format("delta")
+    period_agg_df.write.format("delta")
     .mode("append")
     .option("mergeSchema", "true")
-    .saveAsTable(silver_table)
+    .saveAsTable(agg_table)
 )
-
-tgt_count = valid_count
-print(f"Silver table loaded: {silver_table}, rows: {tgt_count}")
+print(f"Period aggregations written to: {agg_table}")
 
 # COMMAND ----------
 
@@ -164,27 +224,14 @@ print(f"Silver table loaded: {silver_table}, rows: {tgt_count}")
 
 # COMMAND ----------
 
-from utilities.audit_helper import write_audit_entry
-
 write_audit_entry(
-    spark=spark,
-    jdbc_url=AUDIT_JDBC_URL,
-    jdbc_properties=AUDIT_JDBC_PROPERTIES,
-    batch_id=batch_id,
-    application_id=app_id,
-    object_name=silver_table,
-    data_layer="SILVER",
-    job_status="SUCCESS",
-    source_row_count=src_count,
-    target_row_count=tgt_count,
-    error_record_count=error_count,
-    source_system=metadata["source_system"],
-    file_name=bronze_table,
-    load_job_number=load_job_nr
+    spark=spark, batch_id=batch_id, layer="silver", status="SUCCESS",
+    records_inserted=records_inserted, records_updated=records_updated,
+    error_records=cat_fail_count + curr_fail_count,
+    source_system=source_system, data_subject=data_subject,
+    object_name=silver_table, run_id=run_id
 )
-
-print("Audit entry written for Silver layer")
 
 # COMMAND ----------
 
-dbutils.notebook.exit(f'{{"batch_id": "{batch_id}", "valid_count": {valid_count}, "error_count": {error_count}}}')
+dbutils.notebook.exit(f'{{"batch_id":"{batch_id}","src_count":{src_count},"records_inserted":{records_inserted},"records_updated":{records_updated}}}')

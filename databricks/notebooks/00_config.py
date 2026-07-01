@@ -1,82 +1,87 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Configuration Notebook
-# MAGIC Centralized configuration for the Azure Data Pipeline.
-# MAGIC Stores storage, database, and pipeline default settings.
+# MAGIC # 00 - Config
+# MAGIC Shared configuration for all pipeline notebooks.
+# MAGIC Sets catalog, storage paths, JDBC for pipeline config reads, and helper functions.
 
 # COMMAND ----------
 
-# Storage Configuration
-STORAGE_ACCOUNT = "your_adls_storage_account"
+import uuid
+from datetime import datetime
+
+# COMMAND ----------
+
+# Unity Catalog
+CATALOG        = "hpe_catalog"
+BRONZE_SCHEMA  = f"{CATALOG}.bronze"
+SILVER_SCHEMA  = f"{CATALOG}.silver"
+GOLD_SCHEMA    = f"{CATALOG}.gold"
+AUDIT_SCHEMA   = f"{CATALOG}.audit"
+
+spark.sql(f"USE CATALOG {CATALOG}")
+
+# COMMAND ----------
+
+# ADLS containers
+STORAGE_ACCOUNT   = dbutils.secrets.get(scope="kv-scope", key="adls-account-name")
 CONTAINER_LANDING = "landing"
-CONTAINER_BRONZE = "bronze"
-CONTAINER_SILVER = "silver"
-CONTAINER_GOLD = "gold"
 CONTAINER_ARCHIVE = "archive"
 
-ADLS_BASE_PATH = f"abfss://{{container}}@{STORAGE_ACCOUNT}.dfs.core.windows.net"
-
 def get_adls_path(container: str, path: str = "") -> str:
-    """Get the full ADLS path for a given container and relative path."""
     return f"abfss://{container}@{STORAGE_ACCOUNT}.dfs.core.windows.net/{path}"
 
 # COMMAND ----------
 
-# Database Configuration (Delta Lake / Unity Catalog)
-CATALOG = "hpe_catalog"
-BRONZE_SCHEMA = f"{CATALOG}.bronze"
-SILVER_SCHEMA = f"{CATALOG}.silver"
-GOLD_SCHEMA = f"{CATALOG}.gold"
+# Azure SQL — pipeline config only (not job tracking)
+_SQL_SERVER   = dbutils.secrets.get(scope="kv-scope", key="sql-server-fqdn")
+_SQL_USER     = dbutils.secrets.get(scope="kv-scope", key="sql-user")
+_SQL_PASSWORD = dbutils.secrets.get(scope="kv-scope", key="sql-password")
 
-# COMMAND ----------
-
-# Azure SQL Audit Database Configuration
-AUDIT_JDBC_URL = "jdbc:sqlserver://your-sql-server.database.windows.net:1433;database=audit_db"
-AUDIT_JDBC_PROPERTIES = {
-    "user": dbutils.secrets.get(scope="kv-scope", key="sql-user"),
-    "password": dbutils.secrets.get(scope="kv-scope", key="sql-password"),
-    "driver": "com.microsoft.sqlserver.jdbc.SQLServerDriver"
+PIPELINE_JDBC_URL = f"jdbc:sqlserver://{_SQL_SERVER}:1433;database=audit-db;encrypt=true;trustServerCertificate=false"
+PIPELINE_JDBC_PROPS = {
+    "user":     _SQL_USER,
+    "password": _SQL_PASSWORD,
+    "driver":   "com.microsoft.sqlserver.jdbc.SQLServerDriver"
 }
-AUDIT_TABLE = "audit.pipeline_audit"
-DQ_LOG_TABLE = "audit.data_quality_log"
 
 # COMMAND ----------
 
-# Pipeline Defaults
-DEFAULT_FILE_FORMAT = "csv"
-DEFAULT_DELIMITER = "|"
+# Unity Catalog audit tables (job tracking + DQ — NOT Azure SQL)
+JOB_LOG_TABLE = f"{AUDIT_SCHEMA}.job_log"
+DQ_LOG_TABLE  = f"{AUDIT_SCHEMA}.data_quality_log"
+
+# COMMAND ----------
+
+# Pipeline defaults
+DEFAULT_DELIMITER      = "|"
 DEFAULT_NUM_PARTITIONS = 8
 
 # COMMAND ----------
 
-# Helper to read pipeline metadata from Azure SQL
-def get_pipeline_metadata(data_subject: str) -> dict:
-    """Fetch pipeline metadata for a data subject from Azure SQL."""
-    metadata_df = (
-        spark.read
-        .jdbc(
-            url=AUDIT_JDBC_URL,
-            table="audit.pipeline_metadata",
-            properties=AUDIT_JDBC_PROPERTIES
-        )
-        .filter(f"data_subject = '{data_subject}' AND is_active = 1")
-    )
-    
-    if metadata_df.count() == 0:
-        raise ValueError(f"No active metadata found for data_subject: {data_subject}")
-    
-    row = metadata_df.first()
-    return row.asDict()
+def get_batch_id(prefix: str = "") -> str:
+    uid = str(uuid.uuid4()).replace("-", "")[:16]
+    return f"{prefix}_{uid}" if prefix else uid
+
+def get_timestamp(fmt: str = "%Y%m%d%H%M%S") -> str:
+    return datetime.utcnow().strftime(fmt)
 
 # COMMAND ----------
 
-# Timestamp utilities
-from datetime import datetime
+def get_pipeline_metadata(data_subject: str) -> dict:
+    """Read runtime config for a data_subject from Azure SQL pipeline_metadata."""
+    df = (
+        spark.read
+        .jdbc(url=PIPELINE_JDBC_URL, table="audit.pipeline_metadata", properties=PIPELINE_JDBC_PROPS)
+        .filter(f"data_subject = '{data_subject}' AND is_active = 1")
+    )
+    if df.count() == 0:
+        raise ValueError(f"No active pipeline metadata for: {data_subject}")
+    return df.first().asDict()
 
-def get_timestamp(fmt: str = "%Y%m%d%H%M%S") -> str:
-    """Get current timestamp in the specified format."""
-    return datetime.utcnow().strftime(fmt)
+# COMMAND ----------
 
-def get_batch_id(job_name: str) -> str:
-    """Generate a unique batch ID."""
-    return f"{job_name}_{get_timestamp()}"
+# Valid domain values used for Silver business logic validation
+VALID_CATEGORIES = {"SERVER", "STORAGE", "COMPUTE", "NETWORKING", "PRIVATE_CLOUD", "SUPERCOMPUTING", "AI"}
+VALID_CURRENCIES = {"USD", "EUR", "GBP", "JPY", "INR", "SGD", "AED", "BRL", "CAD", "AUD"}
+
+print(f"Config loaded — catalog: {CATALOG}, storage: {STORAGE_ACCOUNT}")

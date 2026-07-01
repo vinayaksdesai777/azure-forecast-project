@@ -1,0 +1,26 @@
+{
+    "name": "ls_sap_hana",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "SapHana",
+        "connectVia": {
+            "referenceName": "AutoResolveIntegrationRuntime",
+            "type": "IntegrationRuntimeReference"
+        },
+        "typeProperties": {
+            "connectionString": "SERVERNODE=<sap_hana_cloud_host>.hanacloud.ondemand.com:443;sslEnabled=true;sslTrustStore=<path_to_truststore>;",
+            "authenticationType": "Basic",
+            "userName": "<sap_hana_user>",
+            "password": {
+                "type": "AzureKeyVaultSecret",
+                "store": {
+                    "referenceName": "ls_keyvault",
+                    "type": "LinkedServiceReference"
+                },
+                "secretName": "saphana-password"
+            }
+        },
+        "annotations": [],
+        "description": "SAP HANA source (ODBC-based). Requires the SAP HANA ODBC driver on the SHIR VM. Use a read replica / calc view where possible; for large fact extracts prefer the SAP Table or SAP CDC connector."
+    }
+}

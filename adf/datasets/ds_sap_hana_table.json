@@ -1,0 +1,32 @@
+{
+    "name": "ds_sap_hana_table",
+    "type": "Microsoft.DataFactory/factories/datasets",
+    "properties": {
+        "linkedServiceName": {
+            "referenceName": "ls_sap_hana",
+            "type": "LinkedServiceReference"
+        },
+        "parameters": {
+            "schemaName": {
+                "type": "string"
+            },
+            "tableName": {
+                "type": "string"
+            }
+        },
+        "type": "SapHanaTable",
+        "schema": [],
+        "typeProperties": {
+            "schema": {
+                "value": "@dataset().schemaName",
+                "type": "Expression"
+            },
+            "table": {
+                "value": "@dataset().tableName",
+                "type": "Expression"
+            }
+        },
+        "annotations": [],
+        "description": "Parameterized SAP HANA table/view source. The Copy activity supplies a sqlReaderQuery for incremental watermark pulls."
+    }
+}

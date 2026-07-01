@@ -1,0 +1,34 @@
+{
+    "name": "ds_azure_sql_metadata",
+    "type": "Microsoft.DataFactory/factories/datasets",
+    "properties": {
+        "linkedServiceName": {
+            "referenceName": "ls_azure_sql_audit",
+            "type": "LinkedServiceReference"
+        },
+        "parameters": {
+            "schemaName": {
+                "type": "string",
+                "defaultValue": "audit"
+            },
+            "tableName": {
+                "type": "string",
+                "defaultValue": "pipeline_metadata"
+            }
+        },
+        "type": "AzureSqlTable",
+        "schema": [],
+        "typeProperties": {
+            "schema": {
+                "value": "@dataset().schemaName",
+                "type": "Expression"
+            },
+            "table": {
+                "value": "@dataset().tableName",
+                "type": "Expression"
+            }
+        },
+        "annotations": [],
+        "description": "Azure SQL metadata dataset (audit DB). Used by Lookup activities to read audit.pipeline_metadata and audit.source_extract_metadata via a sqlReaderQuery."
+    }
+}

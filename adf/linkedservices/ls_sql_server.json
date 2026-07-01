@@ -1,0 +1,24 @@
+{
+    "name": "ls_sql_server",
+    "type": "Microsoft.DataFactory/factories/linkedservices",
+    "properties": {
+        "type": "SqlServer",
+        "connectVia": {
+            "referenceName": "shir-onprem",
+            "type": "IntegrationRuntimeReference"
+        },
+        "typeProperties": {
+            "connectionString": "Data Source=<sql_server_host>;Initial Catalog=<database>;Integrated Security=False;User ID=<sql_user>;",
+            "password": {
+                "type": "AzureKeyVaultSecret",
+                "store": {
+                    "referenceName": "ls_keyvault",
+                    "type": "LinkedServiceReference"
+                },
+                "secretName": "sqlserver-password"
+            }
+        },
+        "annotations": [],
+        "description": "SQL Server source. Via the SHIR if on-prem; switch connectVia to the AutoResolve IR if it is Azure SQL MI with a private endpoint. Use a WHERE watermark for incremental pulls."
+    }
+}

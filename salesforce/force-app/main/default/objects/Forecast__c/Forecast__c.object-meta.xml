@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
+    <deploymentStatus>Deployed</deploymentStatus>
+    <description>HPE o9 Forecast data — monthly and quarterly planning data from Salesforce</description>
+    <label>Forecast</label>
+    <nameField>
+        <label>Forecast Name</label>
+        <type>Text</type>
+    </nameField>
+    <pluralLabel>Forecasts</pluralLabel>
+    <sharingModel>ReadWrite</sharingModel>
+    <fields>
+        <fullName>Product_Id__c</fullName>
+        <label>Product Id</label>
+        <type>Text</type>
+        <length>50</length>
+        <required>false</required>
+    </fields>
+    <fields>
+        <fullName>Location_Id__c</fullName>
+        <label>Location Id</label>
+        <type>Text</type>
+        <length>50</length>
+        <required>false</required>
+    </fields>
+    <fields>
+        <fullName>Forecast_Date__c</fullName>
+        <label>Forecast Date</label>
+        <type>Date</type>
+        <required>false</required>
+    </fields>
+    <fields>
+        <fullName>Forecast_Qty__c</fullName>
+        <label>Forecast Qty</label>
+        <type>Number</type>
+        <precision>12</precision>
+        <scale>2</scale>
+        <required>false</required>
+    </fields>
+    <fields>
+        <fullName>Revenue_Amount__c</fullName>
+        <label>Revenue Amount</label>
+        <type>Number</type>
+        <precision>16</precision>
+        <scale>2</scale>
+        <required>false</required>
+    </fields>
+    <fields>
+        <fullName>Customer_Id__c</fullName>
+        <label>Customer Id</label>
+        <type>Text</type>
+        <length>50</length>
+        <required>false</required>
+    </fields>
+    <fields>
+        <fullName>Channel__c</fullName>
+        <label>Channel</label>
+        <type>Text</type>
+        <length>50</length>
+        <required>false</required>
+    </fields>
+    <fields>
+        <fullName>Category__c</fullName>
+        <label>Category</label>
+        <type>Text</type>
+        <length>100</length>
+        <required>false</required>
+    </fields>
+    <fields>
+        <fullName>Sub_Category__c</fullName>
+        <label>Sub Category</label>
+        <type>Text</type>
+        <length>100</length>
+        <required>false</required>
+    </fields>
+    <fields>
+        <fullName>Region__c</fullName>
+        <label>Region</label>
+        <type>Text</type>
+        <length>100</length>
+        <required>false</required>
+    </fields>
+    <fields>
+        <fullName>Country__c</fullName>
+        <label>Country</label>
+        <type>Text</type>
+        <length>100</length>
+        <required>false</required>
+    </fields>
+    <fields>
+        <fullName>Currency_Code__c</fullName>
+        <label>Currency Code</label>
+        <type>Text</type>
+        <length>10</length>
+        <required>false</required>
+    </fields>
+    <fields>
+        <fullName>UOM__c</fullName>
+        <label>UOM</label>
+        <type>Text</type>
+        <length>20</length>
+        <required>false</required>
+    </fields>
+    <fields>
+        <fullName>Period_Type__c</fullName>
+        <label>Period Type</label>
+        <type>Text</type>
+        <length>20</length>
+        <required>false</required>
+    </fields>
+    <fields>
+        <fullName>Fiscal_Period__c</fullName>
+        <label>Fiscal Period</label>
+        <type>Text</type>
+        <length>20</length>
+        <required>false</required>
+    </fields>
+</CustomObject>
