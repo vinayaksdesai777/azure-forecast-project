@@ -1,0 +1,31 @@
+{
+    "name": "ds_landing_parquet",
+    "properties": {
+        "description": "Landing zone Parquet sink. Parameterized by folderPath and fileName. Written by pl_extract_to_landing; read by 01_ingest_to_bronze.py.",
+        "linkedServiceName": {
+            "referenceName": "ls_adls_gen2",
+            "type": "LinkedServiceReference"
+        },
+        "parameters": {
+            "folderPath": { "type": "string" },
+            "fileName":   { "type": "string" }
+        },
+        "typeProperties": {
+            "location": {
+                "type": "AzureBlobFSLocation",
+                "fileSystem": "landing",
+                "folderPath": {
+                    "value": "@dataset().folderPath",
+                    "type": "Expression"
+                },
+                "fileName": {
+                    "value": "@dataset().fileName",
+                    "type": "Expression"
+                }
+            },
+            "compressionCodec": "snappy"
+        },
+        "schema": [],
+        "type": "Parquet"
+    }
+}

@@ -530,4 +530,206 @@ spark.sql(f"USE CATALOG {CATALOG}")
 6. Gold → periodic fact        ← MERGE write + dim population + archive
 7. Fix Salesforce LIMIT 200    ← ADF pipeline fix
 8. Fix Gold dead code bug      ← remove lines 65-76 in notebook 03
+9. Remove Azure SQL entirely   ← 00_get_metadata + 00_update_watermark notebooks
 ```
+
+---
+
+## 10. Validation Framework
+
+### 10.1 What is Validated and Where
+
+Data quality is enforced at the layer where it can be acted upon, not deferred upstream.
+
+| Check | Layer | Action | Where Recorded |
+|---|---|---|---|
+| PK null check (product_id, location_id, forecast_date) | **Bronze** | Row → quarantine table | `audit.data_quality_log` |
+| Exact duplicate rows | **Bronze** | Keep latest by `_ingestion_ts`, drop rest | `audit.data_quality_log` |
+| Empty string → NULL coercion | **Bronze** | TRIM all strings; blanks become NULL | Inline |
+| Type casting (date, decimal) | **Silver** | Cast; cast failure raises notebook exception | ADF retry |
+| Category domain check | **Silver** | Flag row (not dropped); count logged | `audit.data_quality_log` |
+| Currency domain check | **Silver** | Flag row (not dropped); count logged | `audit.data_quality_log` |
+| SCD2 change detection | **Silver** | Expire old version, insert new | Silver Delta history |
+| Fact deduplication (same PK on re-run) | **Gold** | MERGE `whenNotMatchedInsertAll` — no double-write | Gold Delta history |
+
+### 10.2 Quarantine Table
+
+Rows that fail the Bronze PK null check are routed to `hpe_catalog.bronze.quarantine` with a `_dq_fail_reason` column. They are **never silently dropped** — the original row is preserved for investigation.
+
+```
+SELECT _dq_fail_reason, _batch_id, count(*) 
+FROM hpe_catalog.bronze.quarantine 
+GROUP BY 1, 2 
+ORDER BY 3 DESC;
+```
+
+### 10.3 Data Quality Log Query
+
+```sql
+-- All DQ check results for the last 7 days
+SELECT batch_id, layer, check_type, column_name,
+       records_checked, records_failed,
+       round(records_failed * 100.0 / records_checked, 2) AS fail_pct,
+       insert_time
+FROM   hpe_catalog.audit.data_quality_log
+WHERE  insert_time >= current_date() - INTERVAL 7 DAYS
+ORDER  BY insert_time DESC;
+```
+
+### 10.4 Validation Rules by Source
+
+| Source | PK Columns | Domain Checks |
+|---|---|---|
+| SAP HANA (daily) | product_id, location_id, forecast_date | category (7 valid values), currency (10 valid codes) |
+| SQL Server (weekly) | product_id, location_id, forecast_date | category, currency |
+| Salesforce (monthly/quarterly) | product_id, location_id, forecast_date | category, currency |
+
+---
+
+## 11. Monitoring and Alerting
+
+### 11.1 Monitoring Stack
+
+| Component | Tool | What to Watch |
+|---|---|---|
+| Pipeline runs | ADF Monitor → Pipeline runs | Run status (Succeeded/Failed/Cancelled), duration |
+| Layer-level status | `hpe_catalog.audit.job_log` | status = FAILED, error_message column |
+| DQ failures | `hpe_catalog.audit.data_quality_log` | records_failed > threshold |
+| Quarantine growth | `hpe_catalog.bronze.quarantine` | Row count spike per batch |
+| Cluster health | Databricks Jobs UI | Job run failures, OOM errors |
+
+### 11.2 Failure Escalation Path
+
+```
+ADF pipeline fails
+        │
+        ▼
+ADF sends email alert → pipeline owner (primary on-call)
+        │
+        ▼
+Check ADF activity error → get batch_id from ADF run output
+        │
+        ▼
+Query: SELECT * FROM hpe_catalog.audit.job_log WHERE batch_id = '<id>'
+        │
+   status = FAILED → read error_message column
+        │
+        ├─ Bronze fail → check landing path, source connectivity, quarantine table
+        ├─ Silver fail → check Bronze row count, SCD2 merge condition
+        └─ Gold fail   → check Silver is_active rows, dim table existence
+```
+
+### 11.3 ADF Alert Setup
+
+In ADF Studio → Monitor → Alerts and Metrics:
+
+- **Pipeline failure alert**: Trigger = `PipelineFailedRuns`, Condition = count ≥ 1, Action = email pipeline owner
+- **Long-running alert**: Trigger = `PipelineElapsedTimeRuns`, Condition = elapsed > 120 min, Action = email + Teams notification
+- **Quarantine spike**: Azure Monitor metric alert on `hpe_catalog.bronze.quarantine` row count via Databricks SQL alert
+
+### 11.4 Key Health Queries
+
+```sql
+-- Last 10 pipeline runs across all layers
+SELECT batch_id, layer, status, records_inserted, records_updated,
+       error_records, error_message, insert_time
+FROM   hpe_catalog.audit.job_log
+ORDER  BY insert_time DESC
+LIMIT  20;
+
+-- Any FAILED runs in last 24 hours
+SELECT * FROM hpe_catalog.audit.job_log
+WHERE  status      = 'FAILED'
+  AND  insert_time >= current_timestamp() - INTERVAL 1 DAY;
+
+-- Quarantine summary by batch
+SELECT _batch_id, _dq_fail_reason, count(*) as quarantined_rows, max(_ingestion_ts) as latest
+FROM   hpe_catalog.bronze.quarantine
+GROUP  BY 1, 2
+ORDER  BY 4 DESC;
+```
+
+---
+
+## 12. Deployment
+
+### 12.1 Infrastructure (Terraform)
+
+Terraform manages all cloud infrastructure. No manual Azure portal provisioning.
+
+| Resource | Terraform Module | File |
+|---|---|---|
+| ADLS Gen2 storage account | `azurerm_storage_account` | `infrastructure/main.tf` |
+| ADLS containers (landing, bronze, silver, gold, archive) | `azurerm_storage_data_lake_gen2_filesystem` | `infrastructure/main.tf` |
+| Azure Data Factory instance | `azurerm_data_factory` | `infrastructure/main.tf` |
+| Azure Key Vault | `azurerm_key_vault` | `infrastructure/main.tf` |
+| Databricks workspace | `azurerm_databricks_workspace` | `infrastructure/main.tf` |
+
+```bash
+# First-time infra deployment
+terraform init
+terraform plan  -out=tfplan
+terraform apply tfplan
+
+# Destroy (dev/test only)
+terraform destroy
+```
+
+### 12.2 ADF Pipeline Deployment
+
+ADF pipelines, linked services, and datasets are stored as JSON in `adf/`. Deploy via:
+
+**Option A — Git integration (recommended):**
+1. Connect ADF Studio to this Git repo (Settings → Git configuration)
+2. Develop on a feature branch
+3. Merge to `main` → ADF auto-publishes to the live factory
+
+**Option B — ARM template export:**
+```bash
+# Export current ADF as ARM template from ADF Studio → Manage → Export ARM template
+# Deploy to another environment:
+az deployment group create \
+  --resource-group <rg-name> \
+  --template-file adf_arm_template.json \
+  --parameters @adf_arm_parameters.json
+```
+
+### 12.3 Databricks Notebook Versioning
+
+Notebooks live in `databricks/notebooks/` and `databricks/utilities/` in this Git repo.
+
+**Deployment flow:**
+1. Notebooks are pushed to a Databricks Repo (`/Repos/hpe-forecast/`) via Databricks Git integration
+2. ADF references notebooks by their Repo path (e.g. `/Repos/hpe-forecast/databricks/notebooks/00_get_metadata`)
+3. ADF always runs the version currently on the `main` branch of the Databricks Repo
+
+**To deploy a notebook change:**
+```bash
+git commit -m "update notebook"
+git push origin main
+# Databricks Repo auto-syncs on next job run, or manually: Repos → Pull
+```
+
+### 12.4 Unity Catalog Schema Deployment
+
+Run DDL scripts in order on a new workspace:
+
+```
+1. data_model/04_audit_schema.sql       ← job_log + data_quality_log
+2. data_model/05_pipeline_config.sql    ← pipeline_config + seed data
+3. data_model/01_bronze_schema.sql      ← bronze tables + quarantine
+4. data_model/02_silver_schema.sql      ← silver tables + SCD2 cols + period_agg
+5. data_model/03_gold_schema.sql        ← fact + dim tables
+```
+
+### 12.5 Environment Promotion
+
+| Stage | When | How |
+|---|---|---|
+| Dev | Feature branch work | Manual Databricks run, ADF debug mode |
+| Test | PR merged to `main` | Full pipeline run against test ADLS containers |
+| Prod | Tagged release (`v1.x.x`) | Terraform + ADF ARM deployment to prod resource group |
+
+### 12.6 No Azure SQL Required
+
+Azure SQL has been **fully removed** from this pipeline. No linked service, no connection string, no JDBC driver needed. All config lives in Unity Catalog Delta tables and is accessed by Databricks notebooks.

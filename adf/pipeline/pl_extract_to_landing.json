@@ -1,34 +1,27 @@
 {
     "name": "pl_extract_to_landing",
     "properties": {
-        "description": "Metadata-driven source extraction stage. Pulls each active source object (SAP HANA / SQL Server / Salesforce) into the landing container as pipe-delimited CSV, matching the contract ds_landing_csv expects, then the existing Bronze>Silver>Gold flow takes over unchanged. Runs before pl_master_etl_pipeline.",
+        "description": "Metadata-driven source extraction. Gets extract config from Unity Catalog via 00_get_metadata notebook (no Azure SQL). Extracts SAP HANA / SQL Server / Salesforce into landing Parquet. Updates watermark via 00_update_watermark notebook after each successful copy.",
         "activities": [
             {
                 "name": "Get Extract Metadata",
-                "type": "Lookup",
+                "description": "Calls 00_get_metadata notebook which queries hpe_catalog.audit.pipeline_config (Delta) and returns active extract rows as JSON. No Azure SQL Lookup needed.",
+                "type": "DatabricksNotebook",
                 "dependsOn": [],
                 "policy": {
                     "timeout": "0.00:05:00",
-                    "retry": 2,
+                    "retry": 1,
                     "retryIntervalInSeconds": 30
                 },
                 "typeProperties": {
-                    "source": {
-                        "type": "AzureSqlSource",
-                        "sqlReaderQuery": {
-                            "value": "SELECT source_system, connector, source_schema, source_object, watermark_column, landing_path, load_type, last_watermark, data_subject FROM audit.source_extract_metadata WHERE is_active = 1",
-                            "type": "Expression"
-                        }
-                    },
-                    "dataset": {
-                        "referenceName": "ds_azure_sql_metadata",
-                        "type": "DatasetReference",
-                        "parameters": {
-                            "schemaName": "audit",
-                            "tableName": "source_extract_metadata"
-                        }
-                    },
-                    "firstRowOnly": false
+                    "notebookPath": "/Repos/hpe-forecast/databricks/notebooks/00_get_metadata",
+                    "baseParameters": {
+                        "data_subject": ""
+                    }
+                },
+                "linkedServiceName": {
+                    "referenceName": "ls_databricks",
+                    "type": "LinkedServiceReference"
                 }
             },
             {
@@ -42,7 +35,7 @@
                 ],
                 "typeProperties": {
                     "items": {
-                        "value": "@activity('Get Extract Metadata').output.value",
+                        "value": "@json(activity('Get Extract Metadata').output.runOutput)",
                         "type": "Expression"
                     },
                     "isSequential": false,
@@ -79,13 +72,12 @@
                                                         }
                                                     },
                                                     "sink": {
-                                                        "type": "DelimitedTextSink",
+                                                        "type": "ParquetSink",
                                                         "storeSettings": {
                                                             "type": "AzureBlobFSWriteSettings"
                                                         },
                                                         "formatSettings": {
-                                                            "type": "DelimitedTextWriteSettings",
-                                                            "fileExtension": ".csv"
+                                                            "type": "ParquetWriteSettings"
                                                         }
                                                     },
                                                     "enableStaging": false
@@ -102,12 +94,11 @@
                                                 ],
                                                 "outputs": [
                                                     {
-                                                        "referenceName": "ds_landing_csv",
+                                                        "referenceName": "ds_landing_parquet",
                                                         "type": "DatasetReference",
                                                         "parameters": {
-                                                            "containerName": "landing",
                                                             "folderPath": "@item().landing_path",
-                                                            "fileName": "@concat(item().data_subject, '_', utcNow('yyyyMMddHHmmss'), '.csv')"
+                                                            "fileName": "@concat(item().data_subject, '_', utcNow('yyyyMMddHHmmss'), '.parquet')"
                                                         }
                                                     }
                                                 ]
@@ -135,13 +126,12 @@
                                                         }
                                                     },
                                                     "sink": {
-                                                        "type": "DelimitedTextSink",
+                                                        "type": "ParquetSink",
                                                         "storeSettings": {
                                                             "type": "AzureBlobFSWriteSettings"
                                                         },
                                                         "formatSettings": {
-                                                            "type": "DelimitedTextWriteSettings",
-                                                            "fileExtension": ".csv"
+                                                            "type": "ParquetWriteSettings"
                                                         }
                                                     },
                                                     "enableStaging": false
@@ -158,12 +148,11 @@
                                                 ],
                                                 "outputs": [
                                                     {
-                                                        "referenceName": "ds_landing_csv",
+                                                        "referenceName": "ds_landing_parquet",
                                                         "type": "DatasetReference",
                                                         "parameters": {
-                                                            "containerName": "landing",
                                                             "folderPath": "@item().landing_path",
-                                                            "fileName": "@concat(item().data_subject, '_', utcNow('yyyyMMddHHmmss'), '.csv')"
+                                                            "fileName": "@concat(item().data_subject, '_', utcNow('yyyyMMddHHmmss'), '.parquet')"
                                                         }
                                                     }
                                                 ]
@@ -192,13 +181,12 @@
                                                         "readBehavior": "query"
                                                     },
                                                     "sink": {
-                                                        "type": "DelimitedTextSink",
+                                                        "type": "ParquetSink",
                                                         "storeSettings": {
                                                             "type": "AzureBlobFSWriteSettings"
                                                         },
                                                         "formatSettings": {
-                                                            "type": "DelimitedTextWriteSettings",
-                                                            "fileExtension": ".csv"
+                                                            "type": "ParquetWriteSettings"
                                                         }
                                                     },
                                                     "enableStaging": false
@@ -214,12 +202,11 @@
                                                 ],
                                                 "outputs": [
                                                     {
-                                                        "referenceName": "ds_landing_csv",
+                                                        "referenceName": "ds_landing_parquet",
                                                         "type": "DatasetReference",
                                                         "parameters": {
-                                                            "containerName": "landing",
                                                             "folderPath": "@item().landing_path",
-                                                            "fileName": "@concat(item().data_subject, '_', utcNow('yyyyMMddHHmmss'), '.csv')"
+                                                            "fileName": "@concat(item().data_subject, '_', utcNow('yyyyMMddHHmmss'), '.parquet')"
                                                         }
                                                     }
                                                 ]
@@ -227,32 +214,13 @@
                                         ]
                                     }
                                 ],
-                                "defaultActivities": [
-                                    {
-                                        "name": "Log Unknown Connector",
-                                        "type": "SqlServerStoredProcedure",
-                                        "typeProperties": {
-                                            "storedProcedureName": "audit.usp_insert_audit",
-                                            "storedProcedureParameters": {
-                                                "batch_id": { "value": "@concat(item().data_subject, '_', utcNow('yyyyMMddHHmmss'))" },
-                                                "application_id": { "value": "@pipeline().RunId" },
-                                                "object_name": { "value": "@item().source_object" },
-                                                "data_layer": { "value": "EXTRACT" },
-                                                "job_status": { "value": "FAILED" },
-                                                "source_system": { "value": "@item().source_system" }
-                                            }
-                                        },
-                                        "linkedServiceName": {
-                                            "referenceName": "ls_azure_sql_audit",
-                                            "type": "LinkedServiceReference"
-                                        }
-                                    }
-                                ]
+                                "defaultActivities": []
                             }
                         },
                         {
                             "name": "Update Watermark",
-                            "type": "SqlServerStoredProcedure",
+                            "description": "Calls 00_update_watermark notebook to update hpe_catalog.audit.pipeline_config. Replaces old Azure SQL usp_update_extract_watermark stored proc.",
+                            "type": "DatabricksNotebook",
                             "dependsOn": [
                                 {
                                     "activity": "Extract Source",
@@ -260,15 +228,15 @@
                                 }
                             ],
                             "typeProperties": {
-                                "storedProcedureName": "audit.usp_update_extract_watermark",
-                                "storedProcedureParameters": {
-                                    "source_system": { "value": "@item().source_system" },
-                                    "source_object": { "value": "@item().source_object" },
-                                    "new_watermark": { "value": "@utcNow('yyyy-MM-dd HH:mm:ss')" }
+                                "notebookPath": "/Repos/hpe-forecast/databricks/notebooks/00_update_watermark",
+                                "baseParameters": {
+                                    "data_subject":  "@item().data_subject",
+                                    "new_watermark": "@utcNow('yyyy-MM-dd HH:mm:ss')",
+                                    "run_id":        "@pipeline().RunId"
                                 }
                             },
                             "linkedServiceName": {
-                                "referenceName": "ls_azure_sql_audit",
+                                "referenceName": "ls_databricks",
                                 "type": "LinkedServiceReference"
                             }
                         }
@@ -294,10 +262,6 @@
                         "data_subject": {
                             "value": "@pipeline().parameters.data_subject",
                             "type": "Expression"
-                        },
-                        "storage_account": {
-                            "value": "@pipeline().parameters.storage_account",
-                            "type": "Expression"
                         }
                     }
                 }
@@ -307,13 +271,9 @@
             "data_subject": {
                 "type": "string",
                 "defaultValue": "o9_forecast_daily"
-            },
-            "storage_account": {
-                "type": "string",
-                "defaultValue": "your_adls_storage_account"
             }
         },
-        "annotations": ["Extraction", "Source-to-Landing", "Metadata-Driven"],
+        "annotations": ["Extraction", "Source-to-Landing", "Metadata-Driven", "No-Azure-SQL"],
         "folder": {
             "name": "o9_data_pipeline"
         }
