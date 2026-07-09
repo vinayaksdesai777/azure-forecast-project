@@ -1,8 +1,8 @@
 # Databricks notebook source
 # MAGIC %md
 # MAGIC # Audit Helper Utility
-# MAGIC Writes job tracking entries to hpe_catalog.audit.job_log (Delta, Unity Catalog).
-# MAGIC Replaces the previous Azure SQL JDBC write.
+# MAGIC Writes job tracking and DQ entries to hpe_catalog.audit (Unity Catalog Delta).
+# MAGIC No Azure SQL. No JDBC.
 
 # COMMAND ----------
 
@@ -24,40 +24,7 @@ def write_audit_entry(
     object_name: str = None,
     error_message: str = None,
     run_id: str = None,
-    # legacy params kept for backward compat — ignored
-    jdbc_url: str = None,
-    jdbc_properties: dict = None,
-    application_id: str = None,
-    source_row_count: int = None,
-    target_row_count: int = None,
-    error_record_count: int = None,
-    file_name: str = None,
-    load_job_number: str = None,
-    job_start_ts: str = None,
-    job_end_ts: str = None
 ):
-    """
-    Write one row to hpe_catalog.audit.job_log (Delta table, Unity Catalog).
-
-    Parameters:
-        batch_id         : UUID batch ID linking all layers in one run
-        layer            : bronze / silver / gold / agg_audit
-        status           : SUCCESS / FAILED
-        records_inserted : new rows written to target
-        records_updated  : rows updated via SCD2 merge
-        error_records    : rows quarantined or flagged
-        source_system    : SAP_HANA / SQL_SERVER / SALESFORCE
-        data_subject     : o9_forecast_daily etc.
-        object_name      : target Delta table name
-        error_message    : exception text on failure
-        run_id           : ADF pipeline run ID
-    """
-    # support legacy callers that pass source_row_count / error_record_count
-    if records_inserted == 0 and target_row_count is not None:
-        records_inserted = target_row_count
-    if error_records == 0 and error_record_count is not None:
-        error_records = error_record_count
-
     row = {
         "batch_id":         batch_id,
         "insert_time":      datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
@@ -68,20 +35,16 @@ def write_audit_entry(
         "error_records":    int(error_records or 0),
         "source_system":    source_system,
         "data_subject":     data_subject,
-        "object_name":      object_name or file_name,
+        "object_name":      object_name,
         "error_message":    error_message,
-        "run_id":           run_id or application_id,
+        "run_id":           run_id,
     }
-
     (
         spark.createDataFrame([row])
         .withColumn("insert_time", F.to_timestamp("insert_time"))
-        .write
-        .format("delta")
-        .mode("append")
+        .write.format("delta").mode("append")
         .saveAsTable("hpe_catalog.audit.job_log")
     )
-
     print(f"  [AUDIT] {layer.upper()} | {object_name} | {status.upper()} | "
           f"inserted={records_inserted} updated={records_updated} errors={error_records}")
 
@@ -95,22 +58,11 @@ def mark_audit_failed(
     source_system: str = None,
     data_subject: str = None,
     run_id: str = None,
-    # legacy params
-    jdbc_url: str = None,
-    jdbc_properties: dict = None,
-    application_id: str = None
 ):
-    """Write a FAILED audit entry. Call from exception handlers."""
     write_audit_entry(
-        spark=spark,
-        batch_id=batch_id,
-        layer=layer,
-        status="FAILED",
-        object_name=object_name,
-        error_message=error_message,
-        source_system=source_system,
-        data_subject=data_subject,
-        run_id=run_id or application_id,
+        spark=spark, batch_id=batch_id, layer=layer, status="FAILED",
+        object_name=object_name, error_message=error_message,
+        source_system=source_system, data_subject=data_subject, run_id=run_id,
     )
 
 
@@ -123,13 +75,8 @@ def log_dq_result(
     column_name: str,
     records_checked: int,
     records_failed: int,
-    data_subject: str = None
+    data_subject: str = None,
 ):
-    """
-    Write one DQ check result to hpe_catalog.audit.data_quality_log.
-
-    check_type values: NULL_PK / DEDUP / CURRENCY_VALIDATION / CATEGORY_VALIDATION / TYPE_CAST
-    """
     row = {
         "batch_id":        batch_id,
         "insert_time":     datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
@@ -142,15 +89,10 @@ def log_dq_result(
         "records_failed":  int(records_failed or 0),
         "data_subject":    data_subject,
     }
-
     (
         spark.createDataFrame([row])
         .withColumn("insert_time", F.to_timestamp("insert_time"))
-        .write
-        .format("delta")
-        .mode("append")
+        .write.format("delta").mode("append")
         .saveAsTable("hpe_catalog.audit.data_quality_log")
     )
-
-    print(f"  [DQ] {check_type.upper()} | {table_name} | "
-          f"checked={records_checked} failed={records_failed}")
+    print(f"  [DQ] {check_type.upper()} | {table_name} | checked={records_checked} failed={records_failed}")
