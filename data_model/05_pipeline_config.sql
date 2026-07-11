@@ -59,6 +59,13 @@ VALUES
      'full', 'CHANGED_ON', NULL,
      'product_id,location_id,forecast_date', 'forecast_date', TRUE, 8, TRUE),
 
+    -- SAP HANA Cloud: quarterly long-range (75k rows, 3 quarters: Q3-2025, Q4-2025, Q1-2026)
+    ('o9_forecast_quarterly', 'SAP_HANA', 'SapHana', 'O9_SOURCE', 'FORECAST_QUARTERLY',
+     'quarterly', 'o9/quarterly/',
+     'hpe_catalog.bronze.o9_forecast_raw', 'hpe_catalog.silver.o9_forecast_ref', 'hpe_catalog.gold.o9_forecast_dmnsn',
+     'full', 'CHANGED_ON', NULL,
+     'product_id,location_id,forecast_date', 'forecast_date', TRUE, 4, TRUE),
+
     -- SQL Server on-prem: weekly aggregated (full load first, then incremental by modified_dt)
     ('o9_forecast_weekly', 'SQL_SERVER', 'SqlServer', 'dbo', 'Forecast',
      'weekly', 'o9/weekly/',
@@ -73,9 +80,10 @@ VALUES
      'full', NULL, NULL,
      'product_id,location_id,forecast_date', 'forecast_date', TRUE, 4, TRUE),
 
-    -- Salesforce: quarterly long-range/budget (always full load)
-    ('o9_forecast_quarterly', 'SALESFORCE', 'Salesforce', NULL, 'Forecast__c',
-     'quarterly', 'o9/quarterly/',
+    -- Salesforce: monthly strategic planning (always full load — no watermark on Forecast__c)
+    -- Note: quarterly data moved to SAP HANA Cloud (FORECAST_QUARTERLY table)
+    ('o9_forecast_monthly', 'SALESFORCE', 'Salesforce', NULL, 'Forecast__c',
+     'monthly', 'o9/monthly/',
      'hpe_catalog.bronze.o9_forecast_raw', 'hpe_catalog.silver.o9_forecast_ref', 'hpe_catalog.gold.o9_forecast_dmnsn',
      'full', NULL, NULL,
      'product_id,location_id,forecast_date', 'forecast_date', TRUE, 4, TRUE);

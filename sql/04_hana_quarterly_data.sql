@@ -1,0 +1,163 @@
+-- ============================================================
+-- SAP HANA Cloud — Quarterly Forecast Data
+-- Schema: O9_SOURCE
+-- Run in HANA Database Explorer (BTP Trial cockpit)
+-- ============================================================
+
+-- Create quarterly table (same structure as daily FORECAST_VIEW base table)
+CREATE COLUMN TABLE IF NOT EXISTS "O9_SOURCE"."FORECAST_QUARTERLY" (
+    "PRODUCT_ID"      NVARCHAR(50)    NOT NULL,
+    "LOCATION_ID"     NVARCHAR(50)    NOT NULL,
+    "FORECAST_DATE"   DATE            NOT NULL,
+    "FORECAST_QTY"    DECIMAL(12,2),
+    "REVENUE_AMOUNT"  DECIMAL(16,2),
+    "CUSTOMER_ID"     NVARCHAR(50),
+    "CHANNEL"         NVARCHAR(50),
+    "CATEGORY"        NVARCHAR(50),
+    "SUB_CATEGORY"    NVARCHAR(50),
+    "REGION"          NVARCHAR(50),
+    "COUNTRY"         NVARCHAR(10),
+    "CURRENCY"        NVARCHAR(10),
+    "UOM"             NVARCHAR(20),
+    "PERIOD_TYPE"     NVARCHAR(20)    DEFAULT 'QUARTERLY',
+    "FISCAL_PERIOD"   NVARCHAR(20),
+    "CHANGED_ON"      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY ("PRODUCT_ID", "LOCATION_ID", "FORECAST_DATE")
+);
+
+-- ============================================================
+-- Load ~75,000 quarterly rows: 3 quarters (Q3-2025, Q4-2025, Q1-2026)
+-- 25,000 rows per quarter across 500 products x 200 locations
+-- Includes intentional dirty data (~3%) for DQ pipeline testing
+-- ============================================================
+
+-- Use a procedure to generate bulk data efficiently in HANA
+CREATE OR REPLACE PROCEDURE "O9_SOURCE"."LOAD_QUARTERLY_FORECAST"()
+LANGUAGE SQLSCRIPT AS
+BEGIN
+    DECLARE v_product_id   NVARCHAR(50);
+    DECLARE v_location_id  NVARCHAR(50);
+    DECLARE v_forecast_date DATE;
+    DECLARE v_qty          DECIMAL(12,2);
+    DECLARE v_revenue      DECIMAL(16,2);
+    DECLARE v_customer_id  NVARCHAR(50);
+    DECLARE v_channel      NVARCHAR(50);
+    DECLARE v_category     NVARCHAR(50);
+    DECLARE v_sub_category NVARCHAR(50);
+    DECLARE v_region       NVARCHAR(50);
+    DECLARE v_country      NVARCHAR(10);
+    DECLARE v_currency     NVARCHAR(10);
+    DECLARE v_fiscal       NVARCHAR(20);
+    DECLARE v_i            INTEGER;
+    DECLARE v_row          INTEGER := 0;
+
+    -- Lookup arrays (simulated via CASE)
+    DECLARE v_quarters     INTEGER := 3;
+    DECLARE v_rows_per_q   INTEGER := 25000;
+    DECLARE v_q            INTEGER;
+
+    DELETE FROM "O9_SOURCE"."FORECAST_QUARTERLY";
+
+    FOR v_q IN 1..v_quarters DO
+        -- Q3-2025=1, Q4-2025=2, Q1-2026=3
+        CASE v_q
+            WHEN 1 THEN v_forecast_date := '2025-07-01'; v_fiscal := '2025-Q3';
+            WHEN 2 THEN v_forecast_date := '2025-10-01'; v_fiscal := '2025-Q4';
+            WHEN 3 THEN v_forecast_date := '2026-01-01'; v_fiscal := '2026-Q1';
+        END CASE;
+
+        FOR v_i IN 1..v_rows_per_q DO
+            v_row := v_row + 1;
+
+            -- Product: HPE-PROD-0001 to HPE-PROD-0500
+            v_product_id  := 'HPE-PROD-' || LPAD(TO_NVARCHAR(MOD(v_row, 500) + 1), 4, '0');
+
+            -- Location: LOC-001 to LOC-200
+            v_location_id := 'LOC-' || LPAD(TO_NVARCHAR(MOD(v_row * 7, 200) + 1), 3, '0');
+
+            -- Customer
+            v_customer_id := 'CUST-' || LPAD(TO_NVARCHAR(MOD(v_row * 13, 50000) + 10000), 5, '0');
+
+            -- Channel rotation
+            CASE MOD(v_row, 5)
+                WHEN 0 THEN v_channel := 'DIRECT';
+                WHEN 1 THEN v_channel := 'ONLINE';
+                WHEN 2 THEN v_channel := 'PARTNER';
+                WHEN 3 THEN v_channel := 'DISTRIBUTOR';
+                ELSE        v_channel := 'VAR';
+            END CASE;
+
+            -- Category + sub_category (with ~3% dirty data)
+            CASE MOD(v_row, 100)
+                WHEN 0 THEN v_category := 'HARDWARE';    v_sub_category := 'LEGACY';      -- dirty
+                WHEN 1 THEN v_category := 'UNKNOWN';     v_sub_category := 'NA';           -- dirty
+                WHEN 2 THEN v_category := 'MISC';        v_sub_category := 'OTHER';        -- dirty
+                WHEN 3 THEN v_category := 'SERVER';      v_sub_category := 'PROLIANT';
+                WHEN 4 THEN v_category := 'SERVER';      v_sub_category := 'APOLLO';
+                WHEN 5 THEN v_category := 'STORAGE';     v_sub_category := 'NIMBLE';
+                WHEN 6 THEN v_category := 'STORAGE';     v_sub_category := 'PRIMERA';
+                WHEN 7 THEN v_category := 'COMPUTE';     v_sub_category := 'SYNERGY';
+                WHEN 8 THEN v_category := 'COMPUTE';     v_sub_category := 'BLADESYSTEM';
+                WHEN 9 THEN v_category := 'NETWORKING';  v_sub_category := 'ARUBA';
+                WHEN 10 THEN v_category := 'NETWORKING'; v_sub_category := 'FLEXFABRIC';
+                WHEN 11 THEN v_category := 'PRIVATE_CLOUD'; v_sub_category := 'GREENLAKE';
+                WHEN 12 THEN v_category := 'SUPERCOMPUTING'; v_sub_category := 'CRAY_XD';
+                ELSE
+                    CASE MOD(v_row, 7)
+                        WHEN 0 THEN v_category := 'SERVER';         v_sub_category := 'PROLIANT';
+                        WHEN 1 THEN v_category := 'STORAGE';        v_sub_category := 'PRIMERA';
+                        WHEN 2 THEN v_category := 'COMPUTE';        v_sub_category := 'SYNERGY';
+                        WHEN 3 THEN v_category := 'NETWORKING';     v_sub_category := 'ARUBA';
+                        WHEN 4 THEN v_category := 'PRIVATE_CLOUD';  v_sub_category := 'GREENLAKE';
+                        WHEN 5 THEN v_category := 'SUPERCOMPUTING'; v_sub_category := 'CRAY_EX';
+                        ELSE        v_category := 'AI';             v_sub_category := 'AI_CLUSTER';
+                    END CASE;
+            END CASE;
+
+            -- Region + country + currency
+            CASE MOD(v_row, 4)
+                WHEN 0 THEN v_region := 'NORTH_AMERICA'; v_country := CASE WHEN MOD(v_row,2)=0 THEN 'US' ELSE 'CA' END; v_currency := 'USD';
+                WHEN 1 THEN v_region := 'EMEA';          v_country := CASE MOD(v_row,4) WHEN 1 THEN 'DE' WHEN 2 THEN 'FR' ELSE 'UK' END; v_currency := 'EUR';
+                WHEN 2 THEN v_region := 'APJ';           v_country := CASE MOD(v_row,4) WHEN 2 THEN 'IN' WHEN 3 THEN 'SG' ELSE 'JP' END; v_currency := 'SGD';
+                ELSE        v_region := 'LATAM';         v_country := CASE WHEN MOD(v_row,2)=0 THEN 'BR' ELSE 'MX' END; v_currency := 'BRL';
+            END CASE;
+
+            -- Inject ~1.5% bad currencies
+            IF MOD(v_row, 67) = 0 THEN v_currency := 'XYZ'; END IF;
+
+            -- Quantities and revenue (quarterly = larger buckets than daily)
+            v_qty     := TO_DECIMAL(MOD(v_row * 17, 49000) + 1000, 12, 2);
+            v_revenue := TO_DECIMAL(v_qty * (MOD(v_row * 31, 450) + 50), 16, 2);
+
+            -- ~1% NULL product_id for quarantine testing
+            IF MOD(v_row, 100) = 99 THEN v_product_id := NULL; END IF;
+
+            INSERT INTO "O9_SOURCE"."FORECAST_QUARTERLY"
+            VALUES (
+                v_product_id, v_location_id, v_forecast_date,
+                v_qty, v_revenue, v_customer_id, v_channel,
+                v_category, v_sub_category, v_region, v_country,
+                v_currency, 'UNIT', 'QUARTERLY', v_fiscal,
+                CURRENT_TIMESTAMP
+            );
+        END FOR;
+    END FOR;
+
+    COMMIT;
+END;
+
+-- Execute the procedure
+CALL "O9_SOURCE"."LOAD_QUARTERLY_FORECAST"();
+
+-- Verify
+SELECT "FISCAL_PERIOD", COUNT(*) AS ROW_COUNT
+FROM "O9_SOURCE"."FORECAST_QUARTERLY"
+GROUP BY "FISCAL_PERIOD"
+ORDER BY "FISCAL_PERIOD";
+
+SELECT "CATEGORY", COUNT(*) AS ROW_COUNT
+FROM "O9_SOURCE"."FORECAST_QUARTERLY"
+GROUP BY "CATEGORY"
+ORDER BY ROW_COUNT DESC;
+
+SELECT COUNT(*) AS TOTAL FROM "O9_SOURCE"."FORECAST_QUARTERLY";
