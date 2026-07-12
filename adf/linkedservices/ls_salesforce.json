@@ -7,23 +7,15 @@
             "environmentUrl": "https://login.salesforce.com",
             "username": "<salesforce_user>",
             "password": {
-                "type": "AzureKeyVaultSecret",
-                "store": {
-                    "referenceName": "ls_keyvault",
-                    "type": "LinkedServiceReference"
-                },
-                "secretName": "salesforce-password"
+                "type": "SecureString",
+                "value": "<salesforce_password>"
             },
             "securityToken": {
-                "type": "AzureKeyVaultSecret",
-                "store": {
-                    "referenceName": "ls_keyvault",
-                    "type": "LinkedServiceReference"
-                },
-                "secretName": "salesforce-security-token"
+                "type": "SecureString",
+                "value": "<salesforce_security_token>"
             }
         },
         "annotations": [],
-        "description": "Salesforce source (SaaS, public internet) — uses the Azure AutoResolve IR, no SHIR needed. Query objects with SOQL; use Salesforce Bulk API 2.0 for >1M rows."
+        "description": "Salesforce source. AutoResolve IR (cloud, no SHIR). Password and security token stored as SecureString — ADF encrypts at publish. Set real values via ADF Studio UI."
     }
 }

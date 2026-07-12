@@ -6,7 +6,7 @@
         "typeProperties": {
             "baseUrl": "https://<keyvault_name>.vault.azure.net/"
         },
-        "annotations": [],
-        "description": "Azure Key Vault for storing secrets (connection strings, keys)"
+        "annotations": ["DEPRECATED"],
+        "description": "DEPRECATED — Key Vault removed. ADF linked services use SecureString (ADF encrypts at publish). Databricks notebooks use dbutils.secrets.get(scope='hpe-forecast', key='...'). No Key Vault resource needed."
     }
 }

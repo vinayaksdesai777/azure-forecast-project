@@ -10,15 +10,11 @@
         "typeProperties": {
             "connectionString": "Data Source=<sql_server_host>;Initial Catalog=<database>;Integrated Security=False;User ID=<sql_user>;",
             "password": {
-                "type": "AzureKeyVaultSecret",
-                "store": {
-                    "referenceName": "ls_keyvault",
-                    "type": "LinkedServiceReference"
-                },
-                "secretName": "sqlserver-password"
+                "type": "SecureString",
+                "value": "<sql_server_password>"
             }
         },
         "annotations": [],
-        "description": "SQL Server source. Via the SHIR if on-prem; switch connectVia to the AutoResolve IR if it is Azure SQL MI with a private endpoint. Use a WHERE watermark for incremental pulls."
+        "description": "SQL Server source. SHIR required for on-prem; switch connectVia to AutoResolve for Azure SQL. Password stored as SecureString — ADF encrypts at publish. Set real value via ADF Studio UI."
     }
 }

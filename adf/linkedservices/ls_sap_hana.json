@@ -8,19 +8,15 @@
             "type": "IntegrationRuntimeReference"
         },
         "typeProperties": {
-            "connectionString": "SERVERNODE=<sap_hana_cloud_host>.hanacloud.ondemand.com:443;sslEnabled=true;sslTrustStore=<path_to_truststore>;",
+            "connectionString": "SERVERNODE=<sap_hana_cloud_host>.hanacloud.ondemand.com:443;sslEnabled=true;",
             "authenticationType": "Basic",
             "userName": "<sap_hana_user>",
             "password": {
-                "type": "AzureKeyVaultSecret",
-                "store": {
-                    "referenceName": "ls_keyvault",
-                    "type": "LinkedServiceReference"
-                },
-                "secretName": "saphana-password"
+                "type": "SecureString",
+                "value": "<sap_hana_password>"
             }
         },
         "annotations": [],
-        "description": "SAP HANA source (ODBC-based). Requires the SAP HANA ODBC driver on the SHIR VM. Use a read replica / calc view where possible; for large fact extracts prefer the SAP Table or SAP CDC connector."
+        "description": "SAP HANA Cloud source. AutoResolve IR (cloud-to-cloud, no SHIR). Password stored as SecureString — ADF encrypts at publish. Set real values via ADF Studio UI (never commit plaintext passwords)."
     }
 }

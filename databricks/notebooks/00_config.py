@@ -22,8 +22,11 @@ spark.sql(f"USE CATALOG {CATALOG}")
 
 # COMMAND ----------
 
-# ADLS containers — storage account name from Key Vault, no hard-coded creds
-STORAGE_ACCOUNT   = dbutils.secrets.get(scope="kv-scope", key="adls-account-name")
+# ADLS — all credentials from Databricks secret scope "hpe-forecast"
+# Scope created via: databricks secrets create-scope --scope hpe-forecast
+# Secrets set via:  databricks/secrets_setup.sh
+SECRET_SCOPE      = "hpe-forecast"
+STORAGE_ACCOUNT   = dbutils.secrets.get(scope=SECRET_SCOPE, key="adls-account-name")
 CONTAINER_LANDING = "landing"
 CONTAINER_ARCHIVE = "archive"
 
@@ -75,4 +78,5 @@ VALID_CATEGORIES = {"SERVER", "STORAGE", "COMPUTE", "NETWORKING", "PRIVATE_CLOUD
 VALID_CURRENCIES = {"USD", "EUR", "GBP", "JPY", "INR", "SGD", "AED", "BRL", "CAD", "AUD"}
 
 print(f"Config loaded — catalog: {CATALOG} | storage: {STORAGE_ACCOUNT}")
-print(f"No Azure SQL dependency. All config from Unity Catalog: {PIPELINE_CONFIG}")
+print(f"Secrets from Databricks secret scope: hpe-forecast")
+print(f"No Azure SQL, no Key Vault dependency. Config from Unity Catalog: {PIPELINE_CONFIG}")

@@ -4,17 +4,13 @@
     "properties": {
         "type": "AzureBlobFS",
         "typeProperties": {
-            "url": "https://<storage_account>.dfs.core.windows.net",
+            "url": "https://hpeforecastadls.dfs.core.windows.net",
             "accountKey": {
-                "type": "AzureKeyVaultSecret",
-                "store": {
-                    "referenceName": "ls_keyvault",
-                    "type": "LinkedServiceReference"
-                },
-                "secretName": "adls-storage-key"
+                "type": "SecureString",
+                "value": "<storage_account_key>"
             }
         },
         "annotations": [],
-        "description": "Azure Data Lake Storage Gen2 connection for landing, bronze, silver, gold containers"
+        "description": "ADLS Gen2 — landing, bronze, silver, gold, archive containers. Account key stored as SecureString — ADF encrypts at publish. Set real value via ADF Studio UI. Databricks accesses ADLS via OAuth / Service Principal mount (00_config.py)."
     }
 }
