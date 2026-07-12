@@ -2,7 +2,7 @@
 -- SQL Server On-Prem — Weekly Forecast Data (Full Load Seed)
 -- Schema: dbo | Table: Forecast
 -- Run in SQL Server Management Studio (SSMS) or Azure Data Studio
--- Target: 150,000 rows — 104 weeks x ~1,442 product-location pairs/week
+-- Target: ~112,476 rows — 78 weeks (Jan 2025 to Jun 2026) x 1,442 pairs/week
 -- ============================================================
 
 USE ForecastDB;   -- change to your actual database name
@@ -41,13 +41,13 @@ TRUNCATE TABLE dbo.Forecast;
 GO
 
 -- ============================================================
--- Generate 150,000 rows using a numbers CTE
--- 104 weeks (Jan 2024 — Dec 2025) x 1,442 rows/week
+-- Generate ~112,476 rows using a numbers CTE
+-- 78 weeks (Jan 2025 — Jun 2026) x 1,442 rows/week
 -- Dirty data: ~3% invalid categories, ~1.5% bad currencies, ~1% NULL product_id
 -- ============================================================
 WITH
 weeks AS (
-    SELECT TOP 104
+    SELECT TOP 78
         ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1 AS wk_offset
     FROM sys.all_columns
 ),
@@ -62,8 +62,8 @@ raw AS (
         s.i,
         -- global row number for hash-based variation
         w.wk_offset * 1442 + s.i + 1                                AS rn,
-        -- Monday of each ISO week, starting 2024-01-01
-        DATEADD(WEEK, w.wk_offset, CAST('2024-01-01' AS DATE))      AS forecast_date
+        -- Monday of each ISO week, starting 2025-01-06 (first Mon of Jan 2025)
+        DATEADD(WEEK, w.wk_offset, CAST('2025-01-06' AS DATE))      AS forecast_date
     FROM weeks w CROSS JOIN series s
 ),
 enriched AS (

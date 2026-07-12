@@ -26,7 +26,7 @@ CREATE COLUMN TABLE IF NOT EXISTS "O9_SOURCE"."FORECAST_QUARTERLY" (
 );
 
 -- ============================================================
--- Load ~100,000 quarterly rows: 4 quarters (Q2-2025, Q3-2025, Q4-2025, Q1-2026)
+-- Load 150,000 quarterly rows: 6 quarters (Q1-2025 to Q2-2026)
 -- 25,000 rows per quarter across 500 products x 200 locations
 -- Includes intentional dirty data (~3%) for DQ pipeline testing
 -- ============================================================
@@ -52,19 +52,21 @@ BEGIN
     DECLARE v_row          INTEGER := 0;
 
     -- Lookup arrays (simulated via CASE)
-    DECLARE v_quarters     INTEGER := 4;
+    DECLARE v_quarters     INTEGER := 6;
     DECLARE v_rows_per_q   INTEGER := 25000;
     DECLARE v_q            INTEGER;
 
     DELETE FROM "O9_SOURCE"."FORECAST_QUARTERLY";
 
     FOR v_q IN 1..v_quarters DO
-        -- Q2-2025=1, Q3-2025=2, Q4-2025=3, Q1-2026=4
+        -- Q1-2025=1 through Q2-2026=6
         CASE v_q
-            WHEN 1 THEN v_forecast_date := '2025-04-01'; v_fiscal := '2025-Q2';
-            WHEN 2 THEN v_forecast_date := '2025-07-01'; v_fiscal := '2025-Q3';
-            WHEN 3 THEN v_forecast_date := '2025-10-01'; v_fiscal := '2025-Q4';
-            WHEN 4 THEN v_forecast_date := '2026-01-01'; v_fiscal := '2026-Q1';
+            WHEN 1 THEN v_forecast_date := '2025-01-01'; v_fiscal := '2025-Q1';
+            WHEN 2 THEN v_forecast_date := '2025-04-01'; v_fiscal := '2025-Q2';
+            WHEN 3 THEN v_forecast_date := '2025-07-01'; v_fiscal := '2025-Q3';
+            WHEN 4 THEN v_forecast_date := '2025-10-01'; v_fiscal := '2025-Q4';
+            WHEN 5 THEN v_forecast_date := '2026-01-01'; v_fiscal := '2026-Q1';
+            WHEN 6 THEN v_forecast_date := '2026-04-01'; v_fiscal := '2026-Q2';
         END CASE;
 
         FOR v_i IN 1..v_rows_per_q DO

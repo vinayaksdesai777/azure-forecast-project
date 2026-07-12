@@ -43,7 +43,12 @@ TBLPROPERTIES (
 -- Seed: one row per data subject
 -- First loads are FULL (load_type='full', last_watermark=NULL).
 -- After first run, update load_type='incremental' and set watermark.
--- Row counts for first full load: 100,000+ rows per source.
+-- Data range: Jan 2025 – Jun 2026 for all sources.
+-- Row counts for first full load:
+--   Daily (SAP HANA):    ~199,290 rows (546 days x 365 pairs/day)
+--   Quarterly (SAP HANA): 150,000 rows (6 quarters x 25,000)
+--   Weekly (SQL Server): ~112,476 rows (78 weeks x 1,442 pairs/week)
+--   Monthly (Salesforce):  84,000 rows (9 months, storage-capped)
 -- ============================================================
 INSERT INTO hpe_catalog.audit.pipeline_config
     (data_subject, source_system, connector, source_schema, source_object,
