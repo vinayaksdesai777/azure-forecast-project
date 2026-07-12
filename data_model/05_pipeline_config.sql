@@ -43,12 +43,16 @@ TBLPROPERTIES (
 -- Seed: one row per data subject
 -- First loads are FULL (load_type='full', last_watermark=NULL).
 -- After first run, update load_type='incremental' and set watermark.
--- Data range: Jan 2025 – Jun 2026 for all sources.
--- Row counts for first full load:
---   Daily (SAP HANA):    ~199,290 rows (546 days x 365 pairs/day)
---   Quarterly (SAP HANA): 150,000 rows (6 quarters x 25,000)
---   Weekly (SQL Server): ~112,476 rows (78 weeks x 1,442 pairs/week)
---   Monthly (Salesforce):  84,000 rows (9 months, storage-capped)
+-- ── Full load (Jan-Dec 2025): run once, large historical baseline ──────────
+--   Daily    (SAP HANA):    ~133,225 rows — 05_hana_daily_data.sql
+--   Quarterly(SAP HANA):     100,000 rows — 04_hana_quarterly_data.sql
+--   Weekly   (SQL Server):   ~74,984 rows — 06_sqlserver_weekly_data.sql
+--   Monthly  (Salesforce):    84,000 rows — existing bulk CSVs
+-- ── Incremental deltas (Jan-Jul 2026): 8-10k rows per ADF run ─────────────
+--   Daily    (SAP HANA):      ~9,000 rows/run — 07_hana_daily_delta.sql
+--   Quarterly(SAP HANA):      10,000 rows/run — 08_hana_quarterly_delta.sql
+--   Weekly   (SQL Server):    ~8,500 rows/run — 09_sqlserver_weekly_delta.sql
+--   Monthly  (Salesforce):    ~9,000 rows/run — salesforce/generate_monthly_delta.py
 -- ============================================================
 INSERT INTO hpe_catalog.audit.pipeline_config
     (data_subject, source_system, connector, source_schema, source_object,

@@ -1,43 +1,26 @@
 -- ============================================================
--- SAP HANA Cloud — Daily Forecast Data (FULL LOAD)
--- Schema: O9_SOURCE | Table: FORECAST_DAILY + FORECAST_VIEW
--- Run in HANA Database Explorer (BTP Trial cockpit)
--- Target: ~133,225 rows — Jan 2025 to Dec 2025 (365 days x 365 pairs/day)
--- After this: run 07_hana_daily_delta.sql for Jan-Jul 2026 incremental (9k rows/run)
+-- SAP HANA Cloud — Daily Forecast INCREMENTAL DELTA
+-- Schema: O9_SOURCE | Table: FORECAST_DAILY
+-- Run AFTER 05_hana_daily_data.sql (full load Jan-Dec 2025)
+-- Simulates ADF incremental runs: Jan 2026 to Jul 2026
+-- Each month = one ADF run, ~9,000 new rows with CHANGED_ON > last watermark
+-- ============================================================
+-- Month offsets from 2026-01-01:
+--   Run 1: Jan 2026  (days 1-31,   ~9,000 rows, CHANGED_ON = 2026-01-31 00:05:00)
+--   Run 2: Feb 2026  (days 32-59,  ~9,000 rows, CHANGED_ON = 2026-02-28 00:05:00)
+--   Run 3: Mar 2026  (days 60-90,  ~9,000 rows, CHANGED_ON = 2026-03-31 00:05:00)
+--   Run 4: Apr 2026  (days 91-120, ~9,000 rows, CHANGED_ON = 2026-04-30 00:05:00)
+--   Run 5: May 2026  (days 121-151,~9,000 rows, CHANGED_ON = 2026-05-31 00:05:00)
+--   Run 6: Jun 2026  (days 152-181,~9,000 rows, CHANGED_ON = 2026-06-30 00:05:00)
+--   Run 7: Jul 2026  (days 182-212,~9,000 rows, CHANGED_ON = 2026-07-31 00:05:00)
+-- ADF watermark query: WHERE CHANGED_ON > '<last_watermark>'
 -- ============================================================
 
--- Create base table that FORECAST_VIEW sits on top of
-CREATE COLUMN TABLE IF NOT EXISTS "O9_SOURCE"."FORECAST_DAILY" (
-    "PRODUCT_ID"      NVARCHAR(50)    NOT NULL,
-    "LOCATION_ID"     NVARCHAR(50)    NOT NULL,
-    "FORECAST_DATE"   DATE            NOT NULL,
-    "FORECAST_QTY"    DECIMAL(12,2),
-    "REVENUE_AMOUNT"  DECIMAL(16,2),
-    "CUSTOMER_ID"     NVARCHAR(50),
-    "CHANNEL"         NVARCHAR(50),
-    "CATEGORY"        NVARCHAR(50),
-    "SUB_CATEGORY"    NVARCHAR(50),
-    "REGION"          NVARCHAR(50),
-    "COUNTRY"         NVARCHAR(10),
-    "CURRENCY"        NVARCHAR(10),
-    "UOM"             NVARCHAR(20),
-    "PERIOD_TYPE"     NVARCHAR(20)    DEFAULT 'DAILY',
-    "FISCAL_PERIOD"   NVARCHAR(20),
-    "CHANGED_ON"      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY ("PRODUCT_ID", "LOCATION_ID", "FORECAST_DATE")
-);
-
--- Create view (ADF extracts from this)
-CREATE OR REPLACE VIEW "O9_SOURCE"."FORECAST_VIEW" AS
-    SELECT * FROM "O9_SOURCE"."FORECAST_DAILY";
-
--- ============================================================
--- Load 200,000 daily rows
--- 18 months: Jan-2024 to Jun-2025 (549 days)
--- ~365 product-location combos per day = 200,085 rows total
--- ~3% dirty categories, ~1.5% bad currencies, ~1% NULL product_id
--- ============================================================
-CREATE OR REPLACE PROCEDURE "O9_SOURCE"."LOAD_DAILY_FORECAST"()
+CREATE OR REPLACE PROCEDURE "O9_SOURCE"."LOAD_DAILY_DELTA"(
+    IN v_month_start DATE,
+    IN v_month_end   DATE,
+    IN v_changed_on  TIMESTAMP
+)
 LANGUAGE SQLSCRIPT AS
 BEGIN
     DECLARE v_product_id    NVARCHAR(50);
@@ -56,33 +39,23 @@ BEGIN
     DECLARE v_row           INTEGER := 0;
     DECLARE v_d             INTEGER;
     DECLARE v_i             INTEGER;
-    DECLARE v_total_days    INTEGER := 365;   -- Jan 2025 to Dec 2025 (full load)
-    DECLARE v_per_day       INTEGER := 365;   -- product-location pairs per day
+    DECLARE v_total_days    INTEGER;
+    DECLARE v_per_day       INTEGER := 300;   -- 300 pairs/day = ~9,000 rows/month
 
-    DELETE FROM "O9_SOURCE"."FORECAST_DAILY";
+    v_total_days := DAYS_BETWEEN(v_month_start, v_month_end) + 1;
 
     FOR v_d IN 1..v_total_days DO
-
-        -- Advance date: start 2025-01-01, add (v_d - 1) days
-        v_forecast_date := ADD_DAYS(TO_DATE('2025-01-01'), v_d - 1);
-
-        -- Fiscal period: YYYY-MM
-        v_fiscal := TO_NVARCHAR(YEAR(v_forecast_date)) || '-' ||
-                    LPAD(TO_NVARCHAR(MONTH(v_forecast_date)), 2, '0');
+        v_forecast_date := ADD_DAYS(v_month_start, v_d - 1);
+        v_fiscal := TO_NVARCHAR(YEAR(v_forecast_date)) || '-'
+                    || LPAD(TO_NVARCHAR(MONTH(v_forecast_date)), 2, '0');
 
         FOR v_i IN 1..v_per_day DO
             v_row := v_row + 1;
 
-            -- Product: HPE-PROD-0001 to HPE-PROD-0500
             v_product_id  := 'HPE-PROD-' || LPAD(TO_NVARCHAR(MOD(v_row, 500) + 1), 4, '0');
-
-            -- Location: LOC-001 to LOC-200
             v_location_id := 'LOC-' || LPAD(TO_NVARCHAR(MOD(v_row * 7, 200) + 1), 3, '0');
-
-            -- Customer
             v_customer_id := 'CUST-' || LPAD(TO_NVARCHAR(MOD(v_row * 13, 50000) + 10000), 5, '0');
 
-            -- Channel
             CASE MOD(v_row, 5)
                 WHEN 0 THEN v_channel := 'DIRECT';
                 WHEN 1 THEN v_channel := 'ONLINE';
@@ -91,7 +64,6 @@ BEGIN
                 ELSE        v_channel := 'VAR';
             END CASE;
 
-            -- Base category (7 valid)
             CASE MOD(v_row, 7)
                 WHEN 0 THEN v_category := 'SERVER';         v_sub_category := 'PROLIANT';
                 WHEN 1 THEN v_category := 'STORAGE';        v_sub_category := 'PRIMERA';
@@ -102,15 +74,13 @@ BEGIN
                 ELSE        v_category := 'AI';             v_sub_category := 'AI_CLUSTER';
             END CASE;
 
-            -- Inject ~3% dirty categories
+            -- ~2% dirty categories in delta (less than full load)
             CASE MOD(v_row, 100)
                 WHEN 0 THEN v_category := 'HARDWARE'; v_sub_category := 'LEGACY';
                 WHEN 1 THEN v_category := 'UNKNOWN';  v_sub_category := 'NA';
-                WHEN 2 THEN v_category := 'MISC';     v_sub_category := 'OTHER';
                 ELSE        v_category := v_category; v_sub_category := v_sub_category;
             END CASE;
 
-            -- Region + currency
             CASE MOD(v_row, 4)
                 WHEN 0 THEN v_region := 'NORTH_AMERICA'; v_currency := 'USD';
                 WHEN 1 THEN v_region := 'EMEA';          v_currency := 'EUR';
@@ -118,7 +88,6 @@ BEGIN
                 ELSE        v_region := 'LATAM';         v_currency := 'BRL';
             END CASE;
 
-            -- Country by region
             CASE v_region
                 WHEN 'NORTH_AMERICA' THEN
                     CASE MOD(v_row, 2) WHEN 0 THEN v_country := 'US'; ELSE v_country := 'CA'; END CASE;
@@ -130,42 +99,60 @@ BEGIN
                     CASE MOD(v_row, 2) WHEN 0 THEN v_country := 'BR'; ELSE v_country := 'MX'; END CASE;
             END CASE;
 
-            -- ~1.5% bad currencies
-            v_currency := CASE WHEN MOD(v_row, 67) = 0 THEN 'XYZ' ELSE v_currency END;
+            v_currency   := CASE WHEN MOD(v_row, 67) = 0 THEN 'XYZ' ELSE v_currency END;
+            v_qty        := TO_DECIMAL(MOD(v_row * 11, 4900) + 10, 12, 2);
+            v_revenue    := TO_DECIMAL(v_qty * (MOD(v_row * 31, 450) + 50), 16, 2);
+            v_product_id := CASE WHEN MOD(v_row, 200) = 0 THEN NULL ELSE v_product_id END;
 
-            -- Daily quantities (smaller than quarterly)
-            v_qty     := TO_DECIMAL(MOD(v_row * 11, 4900) + 10, 12, 2);
-            v_revenue := TO_DECIMAL(v_qty * (MOD(v_row * 31, 450) + 50), 16, 2);
-
-            -- ~1% NULL product_id for quarantine testing
-            v_product_id := CASE WHEN MOD(v_row, 100) = 99 THEN NULL ELSE v_product_id END;
-
-            INSERT INTO "O9_SOURCE"."FORECAST_DAILY"
-            VALUES (
+            -- UPSERT: new rows OR re-forecast updates for existing product-location-date
+            UPSERT "O9_SOURCE"."FORECAST_DAILY" VALUES (
                 v_product_id, v_location_id, v_forecast_date,
                 v_qty, v_revenue, v_customer_id, v_channel,
                 v_category, v_sub_category, v_region, v_country,
                 v_currency, 'UNIT', 'DAILY', v_fiscal,
-                CURRENT_TIMESTAMP
-            );
+                v_changed_on     -- all rows in this batch share the same CHANGED_ON
+            ) WHERE "PRODUCT_ID" = v_product_id
+              AND   "LOCATION_ID" = v_location_id
+              AND   "FORECAST_DATE" = v_forecast_date;
         END FOR;
     END FOR;
 
     COMMIT;
 END;
 
--- Execute
-CALL "O9_SOURCE"."LOAD_DAILY_FORECAST"();
+-- ============================================================
+-- Execute: one call per incremental ADF run
+-- Run these one at a time, simulating each monthly ADF trigger.
+-- Each call = one pipeline run with CHANGED_ON > previous run's timestamp.
+-- ============================================================
 
--- Verify
-SELECT COUNT(*) AS TOTAL_ROWS FROM "O9_SOURCE"."FORECAST_DAILY";
+-- Run 1 — Jan 2026 (~9,300 rows, CHANGED_ON = 2026-01-31 00:05:00)
+CALL "O9_SOURCE"."LOAD_DAILY_DELTA"('2026-01-01', '2026-01-31', '2026-01-31 00:05:00');
 
-SELECT "FISCAL_PERIOD", COUNT(*) AS ROW_COUNT
+-- Run 2 — Feb 2026 (~8,400 rows)
+CALL "O9_SOURCE"."LOAD_DAILY_DELTA"('2026-02-01', '2026-02-28', '2026-02-28 00:05:00');
+
+-- Run 3 — Mar 2026 (~9,300 rows)
+CALL "O9_SOURCE"."LOAD_DAILY_DELTA"('2026-03-01', '2026-03-31', '2026-03-31 00:05:00');
+
+-- Run 4 — Apr 2026 (~9,000 rows)
+CALL "O9_SOURCE"."LOAD_DAILY_DELTA"('2026-04-01', '2026-04-30', '2026-04-30 00:05:00');
+
+-- Run 5 — May 2026 (~9,300 rows)
+CALL "O9_SOURCE"."LOAD_DAILY_DELTA"('2026-05-01', '2026-05-31', '2026-05-31 00:05:00');
+
+-- Run 6 — Jun 2026 (~9,000 rows)
+CALL "O9_SOURCE"."LOAD_DAILY_DELTA"('2026-06-01', '2026-06-30', '2026-06-30 00:05:00');
+
+-- Run 7 — Jul 2026 (~9,300 rows)
+CALL "O9_SOURCE"."LOAD_DAILY_DELTA"('2026-07-01', '2026-07-31', '2026-07-31 00:05:00');
+
+-- Verify watermark progression
+SELECT
+    TO_NVARCHAR(YEAR("FORECAST_DATE")) || '-' || LPAD(TO_NVARCHAR(MONTH("FORECAST_DATE")), 2, '0') AS month,
+    COUNT(*)            AS rows,
+    MAX("CHANGED_ON")   AS latest_changed_on
 FROM "O9_SOURCE"."FORECAST_DAILY"
-GROUP BY "FISCAL_PERIOD"
-ORDER BY "FISCAL_PERIOD";
-
-SELECT "CATEGORY", COUNT(*) AS ROW_COUNT
-FROM "O9_SOURCE"."FORECAST_DAILY"
-GROUP BY "CATEGORY"
-ORDER BY ROW_COUNT DESC;
+WHERE "FORECAST_DATE" >= '2026-01-01'
+GROUP BY TO_NVARCHAR(YEAR("FORECAST_DATE")) || '-' || LPAD(TO_NVARCHAR(MONTH("FORECAST_DATE")), 2, '0')
+ORDER BY month;
