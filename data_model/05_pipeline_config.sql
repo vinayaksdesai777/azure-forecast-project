@@ -74,14 +74,7 @@ VALUES
      'product_id,location_id,forecast_date', 'forecast_date', TRUE, 8, TRUE),
 
     -- Salesforce: monthly strategic planning (always full load — no watermark on Forecast__c)
-    ('o9_forecast_monthly', 'SALESFORCE', 'Salesforce', NULL, 'Forecast__c',
-     'monthly', 'o9/monthly/',
-     'hpe_catalog.bronze.o9_forecast_raw', 'hpe_catalog.silver.o9_forecast_ref', 'hpe_catalog.gold.o9_forecast_dmnsn',
-     'full', NULL, NULL,
-     'product_id,location_id,forecast_date', 'forecast_date', TRUE, 4, TRUE),
-
-    -- Salesforce: monthly strategic planning (always full load — no watermark on Forecast__c)
-    -- Note: quarterly data moved to SAP HANA Cloud (FORECAST_QUARTERLY table)
+    -- Quarterly data is in SAP HANA Cloud (FORECAST_QUARTERLY) — see o9_forecast_quarterly row above
     ('o9_forecast_monthly', 'SALESFORCE', 'Salesforce', NULL, 'Forecast__c',
      'monthly', 'o9/monthly/',
      'hpe_catalog.bronze.o9_forecast_raw', 'hpe_catalog.silver.o9_forecast_ref', 'hpe_catalog.gold.o9_forecast_dmnsn',

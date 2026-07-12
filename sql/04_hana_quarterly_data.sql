@@ -87,50 +87,68 @@ BEGIN
                 ELSE        v_channel := 'VAR';
             END CASE;
 
-            -- Category + sub_category (with ~3% dirty data)
+            -- Base category rotation (7 valid HPE categories)
+            CASE MOD(v_row, 7)
+                WHEN 0 THEN v_category := 'SERVER';         v_sub_category := 'PROLIANT';
+                WHEN 1 THEN v_category := 'STORAGE';        v_sub_category := 'PRIMERA';
+                WHEN 2 THEN v_category := 'COMPUTE';        v_sub_category := 'SYNERGY';
+                WHEN 3 THEN v_category := 'NETWORKING';     v_sub_category := 'ARUBA';
+                WHEN 4 THEN v_category := 'PRIVATE_CLOUD';  v_sub_category := 'GREENLAKE';
+                WHEN 5 THEN v_category := 'SUPERCOMPUTING'; v_sub_category := 'CRAY_EX';
+                ELSE        v_category := 'AI';             v_sub_category := 'AI_CLUSTER';
+            END CASE;
+
+            -- Inject ~3% dirty categories (override every 100th row pattern)
             CASE MOD(v_row, 100)
-                WHEN 0 THEN v_category := 'HARDWARE';    v_sub_category := 'LEGACY';      -- dirty
-                WHEN 1 THEN v_category := 'UNKNOWN';     v_sub_category := 'NA';           -- dirty
-                WHEN 2 THEN v_category := 'MISC';        v_sub_category := 'OTHER';        -- dirty
-                WHEN 3 THEN v_category := 'SERVER';      v_sub_category := 'PROLIANT';
-                WHEN 4 THEN v_category := 'SERVER';      v_sub_category := 'APOLLO';
-                WHEN 5 THEN v_category := 'STORAGE';     v_sub_category := 'NIMBLE';
-                WHEN 6 THEN v_category := 'STORAGE';     v_sub_category := 'PRIMERA';
-                WHEN 7 THEN v_category := 'COMPUTE';     v_sub_category := 'SYNERGY';
-                WHEN 8 THEN v_category := 'COMPUTE';     v_sub_category := 'BLADESYSTEM';
-                WHEN 9 THEN v_category := 'NETWORKING';  v_sub_category := 'ARUBA';
-                WHEN 10 THEN v_category := 'NETWORKING'; v_sub_category := 'FLEXFABRIC';
-                WHEN 11 THEN v_category := 'PRIVATE_CLOUD'; v_sub_category := 'GREENLAKE';
-                WHEN 12 THEN v_category := 'SUPERCOMPUTING'; v_sub_category := 'CRAY_XD';
+                WHEN 0 THEN v_category := 'HARDWARE'; v_sub_category := 'LEGACY';
+                WHEN 1 THEN v_category := 'UNKNOWN';  v_sub_category := 'NA';
+                WHEN 2 THEN v_category := 'MISC';     v_sub_category := 'OTHER';
+                ELSE        v_category := v_category; v_sub_category := v_sub_category;
+            END CASE;
+
+            -- Region + currency by quadrant
+            CASE MOD(v_row, 4)
+                WHEN 0 THEN v_region := 'NORTH_AMERICA'; v_currency := 'USD';
+                WHEN 1 THEN v_region := 'EMEA';          v_currency := 'EUR';
+                WHEN 2 THEN v_region := 'APJ';           v_currency := 'SGD';
+                ELSE        v_region := 'LATAM';         v_currency := 'BRL';
+            END CASE;
+
+            -- Country by region
+            CASE v_region
+                WHEN 'NORTH_AMERICA' THEN
+                    CASE MOD(v_row, 2)
+                        WHEN 0 THEN v_country := 'US';
+                        ELSE        v_country := 'CA';
+                    END CASE;
+                WHEN 'EMEA' THEN
+                    CASE MOD(v_row, 3)
+                        WHEN 0 THEN v_country := 'DE';
+                        WHEN 1 THEN v_country := 'FR';
+                        ELSE        v_country := 'UK';
+                    END CASE;
+                WHEN 'APJ' THEN
+                    CASE MOD(v_row, 3)
+                        WHEN 0 THEN v_country := 'JP';
+                        WHEN 1 THEN v_country := 'IN';
+                        ELSE        v_country := 'SG';
+                    END CASE;
                 ELSE
-                    CASE MOD(v_row, 7)
-                        WHEN 0 THEN v_category := 'SERVER';         v_sub_category := 'PROLIANT';
-                        WHEN 1 THEN v_category := 'STORAGE';        v_sub_category := 'PRIMERA';
-                        WHEN 2 THEN v_category := 'COMPUTE';        v_sub_category := 'SYNERGY';
-                        WHEN 3 THEN v_category := 'NETWORKING';     v_sub_category := 'ARUBA';
-                        WHEN 4 THEN v_category := 'PRIVATE_CLOUD';  v_sub_category := 'GREENLAKE';
-                        WHEN 5 THEN v_category := 'SUPERCOMPUTING'; v_sub_category := 'CRAY_EX';
-                        ELSE        v_category := 'AI';             v_sub_category := 'AI_CLUSTER';
+                    CASE MOD(v_row, 2)
+                        WHEN 0 THEN v_country := 'BR';
+                        ELSE        v_country := 'MX';
                     END CASE;
             END CASE;
 
-            -- Region + country + currency
-            CASE MOD(v_row, 4)
-                WHEN 0 THEN v_region := 'NORTH_AMERICA'; v_country := CASE WHEN MOD(v_row,2)=0 THEN 'US' ELSE 'CA' END; v_currency := 'USD';
-                WHEN 1 THEN v_region := 'EMEA';          v_country := CASE MOD(v_row,4) WHEN 1 THEN 'DE' WHEN 2 THEN 'FR' ELSE 'UK' END; v_currency := 'EUR';
-                WHEN 2 THEN v_region := 'APJ';           v_country := CASE MOD(v_row,4) WHEN 2 THEN 'IN' WHEN 3 THEN 'SG' ELSE 'JP' END; v_currency := 'SGD';
-                ELSE        v_region := 'LATAM';         v_country := CASE WHEN MOD(v_row,2)=0 THEN 'BR' ELSE 'MX' END; v_currency := 'BRL';
-            END CASE;
-
             -- Inject ~1.5% bad currencies
-            IF MOD(v_row, 67) = 0 THEN v_currency := 'XYZ'; END IF;
+            v_currency := CASE WHEN MOD(v_row, 67) = 0 THEN 'XYZ' ELSE v_currency END;
 
             -- Quantities and revenue (quarterly = larger buckets than daily)
             v_qty     := TO_DECIMAL(MOD(v_row * 17, 49000) + 1000, 12, 2);
             v_revenue := TO_DECIMAL(v_qty * (MOD(v_row * 31, 450) + 50), 16, 2);
 
             -- ~1% NULL product_id for quarantine testing
-            IF MOD(v_row, 100) = 99 THEN v_product_id := NULL; END IF;
+            v_product_id := CASE WHEN MOD(v_row, 100) = 99 THEN NULL ELSE v_product_id END;
 
             INSERT INTO "O9_SOURCE"."FORECAST_QUARTERLY"
             VALUES (

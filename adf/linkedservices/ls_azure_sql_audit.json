@@ -13,7 +13,7 @@
                 "secretName": "sql-audit-connection-string"
             }
         },
-        "annotations": [],
-        "description": "Azure SQL Database for audit and metadata tables"
+        "annotations": ["DEPRECATED"],
+        "description": "DEPRECATED — Azure SQL removed. Audit and metadata now in hpe_catalog.audit (Unity Catalog Delta). Do not use in new pipelines."
     }
 }

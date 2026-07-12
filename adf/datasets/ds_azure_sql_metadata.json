@@ -28,7 +28,7 @@
                 "type": "Expression"
             }
         },
-        "annotations": [],
-        "description": "Azure SQL metadata dataset (audit DB). Used by Lookup activities to read audit.pipeline_metadata and audit.source_extract_metadata via a sqlReaderQuery."
+        "annotations": ["DEPRECATED"],
+        "description": "DEPRECATED — Azure SQL removed. Pipeline metadata now in hpe_catalog.audit.pipeline_config (Unity Catalog Delta), read by 00_get_metadata notebook. Do not use in new pipelines."
     }
 }

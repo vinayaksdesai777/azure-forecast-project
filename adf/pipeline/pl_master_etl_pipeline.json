@@ -1,47 +1,27 @@
 {
     "name": "pl_master_etl_pipeline",
     "properties": {
-        "description": "Master orchestration pipeline for the end-to-end ETL process. Ingests CSV from landing, transforms through Bronze > Silver > Gold layers using Databricks.",
+        "description": "Master orchestration: Landing Parquet → Bronze → Silver → Gold via Databricks notebooks. No Azure SQL. Metadata from Unity Catalog via 00_get_metadata notebook.",
         "activities": [
             {
-                "name": "Get Pipeline Metadata",
-                "type": "Lookup",
+                "name": "Check Source Files Exist",
+                "description": "Checks that ADF already landed Parquet files before kicking off Bronze.",
+                "type": "GetMetadata",
                 "dependsOn": [],
                 "policy": {
                     "timeout": "0.00:05:00",
-                    "retry": 2,
+                    "retry": 1,
                     "retryIntervalInSeconds": 30
                 },
                 "typeProperties": {
-                    "source": {
-                        "type": "AzureSqlSource",
-                        "sqlReaderQuery": {
-                            "value": "SELECT * FROM audit.pipeline_metadata WHERE data_subject = '@{pipeline().parameters.data_subject}' AND is_active = 1",
-                            "type": "Expression"
-                        }
-                    },
                     "dataset": {
-                        "referenceName": "ds_azure_sql_metadata",
-                        "type": "DatasetReference"
-                    }
-                }
-            },
-            {
-                "name": "Check Source Files Exist",
-                "type": "GetMetadata",
-                "dependsOn": [
-                    {
-                        "activity": "Get Pipeline Metadata",
-                        "dependencyConditions": ["Succeeded"]
-                    }
-                ],
-                "typeProperties": {
-                    "dataset": {
-                        "referenceName": "ds_landing_csv",
+                        "referenceName": "ds_landing_parquet",
                         "type": "DatasetReference",
                         "parameters": {
-                            "containerName": "landing",
-                            "folderPath": "@{activity('Get Pipeline Metadata').output.firstRow.source_path}",
+                            "folderPath": {
+                                "value": "@pipeline().parameters.landing_path",
+                                "type": "Expression"
+                            },
                             "fileName": "*"
                         }
                     },
@@ -73,20 +53,24 @@
                                 "retryIntervalInSeconds": 60
                             },
                             "typeProperties": {
-                                "notebookPath": "/Shared/azure-data-pipeline/notebooks/01_ingest_to_bronze",
+                                "notebookPath": "/Repos/hpe-forecast/databricks/notebooks/01_ingest_to_bronze",
                                 "baseParameters": {
                                     "data_subject": {
                                         "value": "@pipeline().parameters.data_subject",
                                         "type": "Expression"
                                     },
                                     "source_path": {
-                                        "value": "@concat('abfss://landing@', pipeline().parameters.storage_account, '.dfs.core.windows.net/', activity('Get Pipeline Metadata').output.firstRow.source_path)",
+                                        "value": "@concat('abfss://landing@', pipeline().parameters.storage_account, '.dfs.core.windows.net/', pipeline().parameters.landing_path)",
+                                        "type": "Expression"
+                                    },
+                                    "run_id": {
+                                        "value": "@pipeline().RunId",
                                         "type": "Expression"
                                     }
                                 }
                             },
                             "linkedServiceName": {
-                                "referenceName": "ls_azure_databricks",
+                                "referenceName": "ls_databricks",
                                 "type": "LinkedServiceReference"
                             }
                         },
@@ -105,7 +89,7 @@
                                 "retryIntervalInSeconds": 60
                             },
                             "typeProperties": {
-                                "notebookPath": "/Shared/azure-data-pipeline/notebooks/02_bronze_to_silver",
+                                "notebookPath": "/Repos/hpe-forecast/databricks/notebooks/02_bronze_to_silver",
                                 "baseParameters": {
                                     "data_subject": {
                                         "value": "@pipeline().parameters.data_subject",
@@ -114,11 +98,15 @@
                                     "batch_id": {
                                         "value": "@json(activity('Run Bronze Notebook').output.runOutput).batch_id",
                                         "type": "Expression"
+                                    },
+                                    "run_id": {
+                                        "value": "@pipeline().RunId",
+                                        "type": "Expression"
                                     }
                                 }
                             },
                             "linkedServiceName": {
-                                "referenceName": "ls_azure_databricks",
+                                "referenceName": "ls_databricks",
                                 "type": "LinkedServiceReference"
                             }
                         },
@@ -137,7 +125,7 @@
                                 "retryIntervalInSeconds": 60
                             },
                             "typeProperties": {
-                                "notebookPath": "/Shared/azure-data-pipeline/notebooks/03_silver_to_gold",
+                                "notebookPath": "/Repos/hpe-forecast/databricks/notebooks/03_silver_to_gold",
                                 "baseParameters": {
                                     "data_subject": {
                                         "value": "@pipeline().parameters.data_subject",
@@ -146,11 +134,15 @@
                                     "batch_id": {
                                         "value": "@json(activity('Run Silver Notebook').output.runOutput).batch_id",
                                         "type": "Expression"
+                                    },
+                                    "run_id": {
+                                        "value": "@pipeline().RunId",
+                                        "type": "Expression"
                                     }
                                 }
                             },
                             "linkedServiceName": {
-                                "referenceName": "ls_azure_databricks",
+                                "referenceName": "ls_databricks",
                                 "type": "LinkedServiceReference"
                             }
                         },
@@ -169,7 +161,7 @@
                                 "retryIntervalInSeconds": 60
                             },
                             "typeProperties": {
-                                "notebookPath": "/Shared/azure-data-pipeline/notebooks/04_aggregated_audit",
+                                "notebookPath": "/Repos/hpe-forecast/databricks/notebooks/04_aggregated_audit",
                                 "baseParameters": {
                                     "data_subject": {
                                         "value": "@pipeline().parameters.data_subject",
@@ -178,11 +170,15 @@
                                     "batch_id": {
                                         "value": "@json(activity('Run Gold Notebook').output.runOutput).batch_id",
                                         "type": "Expression"
+                                    },
+                                    "run_id": {
+                                        "value": "@pipeline().RunId",
+                                        "type": "Expression"
                                     }
                                 }
                             },
                             "linkedServiceName": {
-                                "referenceName": "ls_azure_databricks",
+                                "referenceName": "ls_databricks",
                                 "type": "LinkedServiceReference"
                             }
                         }
@@ -190,20 +186,24 @@
                     "ifFalseActivities": [
                         {
                             "name": "Log No Source Files",
-                            "type": "SqlServerStoredProcedure",
+                            "description": "No Parquet files in landing — log NO_DATA via audit notebook.",
+                            "type": "DatabricksNotebook",
                             "typeProperties": {
-                                "storedProcedureName": "audit.usp_insert_audit",
-                                "storedProcedureParameters": {
-                                    "batch_id": { "value": "@concat(pipeline().parameters.data_subject, '_', utcNow('yyyyMMddHHmmss'))" },
-                                    "application_id": { "value": "@pipeline().RunId" },
-                                    "object_name": { "value": "@pipeline().parameters.data_subject" },
-                                    "data_layer": { "value": "LANDING" },
-                                    "job_status": { "value": "NO_DATA" },
-                                    "source_system": { "value": "@activity('Get Pipeline Metadata').output.firstRow.source_system" }
+                                "notebookPath": "/Repos/hpe-forecast/databricks/notebooks/00_get_metadata",
+                                "baseParameters": {
+                                    "data_subject": {
+                                        "value": "@pipeline().parameters.data_subject",
+                                        "type": "Expression"
+                                    },
+                                    "status_override": "NO_DATA",
+                                    "run_id": {
+                                        "value": "@pipeline().RunId",
+                                        "type": "Expression"
+                                    }
                                 }
                             },
                             "linkedServiceName": {
-                                "referenceName": "ls_azure_sql_audit",
+                                "referenceName": "ls_databricks",
                                 "type": "LinkedServiceReference"
                             }
                         }
@@ -216,12 +216,16 @@
                 "type": "string",
                 "defaultValue": "o9_forecast_daily"
             },
+            "landing_path": {
+                "type": "string",
+                "defaultValue": "o9/daily/"
+            },
             "storage_account": {
                 "type": "string",
-                "defaultValue": "your_adls_storage_account"
+                "defaultValue": "hpeforecastadls"
             }
         },
-        "annotations": ["ETL", "Medallion", "Bronze-Silver-Gold"],
+        "annotations": ["ETL", "Medallion", "Bronze-Silver-Gold", "No-Azure-SQL"],
         "folder": {
             "name": "o9_data_pipeline"
         }
