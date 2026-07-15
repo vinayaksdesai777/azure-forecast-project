@@ -86,12 +86,16 @@ VALUES
      'full', 'modified_dt', NULL,
      'product_id,location_id,forecast_date', 'forecast_date', TRUE, 8, TRUE),
 
-    -- Salesforce: monthly strategic planning (always full load — no watermark on Forecast__c)
+    -- Salesforce Data Cloud: monthly strategic planning
+    -- Source: Data Cloud DLO object (HPE_Forecast_Monthly__dll)
+    -- Ingested via Data Cloud Ingestion API (salesforce/generate_full_load.py)
+    -- ADF reads via SalesforceServiceCloud connector + SOQL on DLO
+    -- Incremental by LastModifiedDate once full load is done
     -- Quarterly data is in SAP HANA Cloud (FORECAST_QUARTERLY) — see o9_forecast_quarterly row above
-    ('o9_forecast_monthly', 'SALESFORCE', 'Salesforce', NULL, 'Forecast__c',
+    ('o9_forecast_monthly', 'SALESFORCE', 'Salesforce', NULL, 'HPE_Forecast_Monthly__dll',
      'monthly', 'o9/monthly/',
      'hpe_catalog.bronze.o9_forecast_raw', 'hpe_catalog.silver.o9_forecast_ref', 'hpe_catalog.gold.o9_forecast_dmnsn',
-     'full', NULL, NULL,
+     'full', 'LastModifiedDate', NULL,
      'product_id,location_id,forecast_date', 'forecast_date', TRUE, 4, TRUE);
 
 -- ============================================================

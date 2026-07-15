@@ -11,7 +11,7 @@
                 "type": "string"
             }
         },
-        "type": "SalesforceObject",
+        "type": "SalesforceServiceCloudObject",
         "schema": [],
         "typeProperties": {
             "objectApiName": {
@@ -20,6 +20,6 @@
             }
         },
         "annotations": [],
-        "description": "Parameterized Salesforce object source. The Copy activity supplies a SOQL query (use Bulk API 2.0 for high volume)."
+        "description": "Salesforce Data Cloud object source. objectApiName = DLO API name (e.g. HPE_Forecast_Monthly__dll). ADF uses SalesforceServiceCloudObject type for Data Cloud DLO queries."
     }
 }

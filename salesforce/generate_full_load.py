@@ -1,26 +1,37 @@
 """
-Salesforce Monthly Forecast — FULL LOAD Generator
-Generates 60 months of data (Jul 2020 - Jun 2025) and uploads via Bulk API 2.0.
-Target: 5,000-8,000 rows/month (~390,000 rows total across 60 months).
+Salesforce Data Cloud — Monthly Forecast Full Load
+Ingests 60 months of data (Jul 2020 - Jun 2025) into a Data Cloud
+Data Stream using the Ingestion API (no 5MB storage cap).
 
-Because Salesforce Developer Edition has a 5MB storage cap, this script
-uploads in monthly batches so you can stop/resume and monitor storage usage.
+Prerequisites — do these once in Data Cloud UI before running:
+  1. Setup → Data Cloud → Data Streams → New → "Ingestion API"
+  2. Name it: HPE_Forecast_Monthly
+  3. Add all fields matching the schema below (STRING / DATE / NUMBER)
+  4. The DLO (Data Lake Object) auto-created = HPE_Forecast_Monthly__dll
+  5. Setup → Data Cloud → Connected Apps → create an OAuth connected app
+     with scope: cdp_ingest_api, cdp_query_api, refresh_token
+  6. Note: Connected App Consumer Key + Secret
 
 Usage:
-    # Dry run — generates CSVs only, no upload
+    # Step 1: get OAuth token (run once, token lasts ~2 hrs)
+    python generate_full_load.py --auth
+
+    # Step 2: dry run — generate all 60 CSVs locally, no upload
     python generate_full_load.py --dry-run
 
-    # Upload one month at a time (recommended — monitor storage between runs)
+    # Step 3: upload one month (test first)
     python generate_full_load.py --month 2020-07
-    python generate_full_load.py --month 2020-08
-    ...
 
-    # Upload all 60 months sequentially (unattended — watch storage limit)
+    # Step 4: upload all 60 months sequentially
     python generate_full_load.py --all
 
-Environment variables required for upload:
-    SF_PASSWORD   your Salesforce password
-    SF_TOKEN      your Salesforce security token
+Environment variables:
+    DC_CLIENT_ID       Connected App Consumer Key
+    DC_CLIENT_SECRET   Connected App Consumer Secret
+    DC_USERNAME        your Salesforce / Data Cloud username
+    DC_PASSWORD        your password
+    DC_ORG_URL         your Data Cloud org URL, e.g. https://xyz.salesforce.com
+    DC_STREAM_NAME     Data Stream API name, e.g. HPE_Forecast_Monthly
 """
 
 import argparse
@@ -31,19 +42,20 @@ import os
 import sys
 import time
 import requests
-from datetime import date
-from calendar import monthrange
 
-# ── Config ────────────────────────────────────────────────────────────────────
-SF_USERNAME       = "vinayaksdesai777@gmail.com"
-SF_PASSWORD       = os.environ.get("SF_PASSWORD", "")
-SF_SECURITY_TOKEN = os.environ.get("SF_TOKEN", "")
-SF_LOGIN_URL      = "https://login.salesforce.com"
-OBJECT_API_NAME   = "Forecast__c"
+# ── Config ─────────────────────────────────────────────────────────────────────
+DC_CLIENT_ID    = os.environ.get("DC_CLIENT_ID", "")
+DC_CLIENT_SECRET= os.environ.get("DC_CLIENT_SECRET", "")
+DC_USERNAME     = os.environ.get("DC_USERNAME", "vinayaksdesai777@gmail.com")
+DC_PASSWORD     = os.environ.get("DC_PASSWORD", "")
+DC_ORG_URL      = os.environ.get("DC_ORG_URL", "https://<your-dc-org>.salesforce.com")
+DC_STREAM_NAME  = os.environ.get("DC_STREAM_NAME", "HPE_Forecast_Monthly")
+
+TOKEN_CACHE     = ".dc_token_cache.json"
 
 # Full load window
-FULL_LOAD_START = (2020, 7)   # Jul 2020
-FULL_LOAD_END   = (2025, 6)   # Jun 2025 inclusive
+FULL_LOAD_START = (2020, 7)
+FULL_LOAD_END   = (2025, 6)
 
 VALID_CATEGORIES = ["SERVER","STORAGE","COMPUTE","NETWORKING",
                     "PRIVATE_CLOUD","SUPERCOMPUTING","AI"]
@@ -62,7 +74,7 @@ COUNTRY_MAP  = {
     "LATAM":         ["BR","MX"],
 }
 
-# ── Month list ────────────────────────────────────────────────────────────────
+# ── Month helpers ───────────────────────────────────────────────────────────────
 def all_months() -> list[str]:
     months = []
     y, m = FULL_LOAD_START
@@ -74,166 +86,209 @@ def all_months() -> list[str]:
             m = 1; y += 1
     return months
 
-# ── Row count per month: vary between 5000-8000 ───────────────────────────────
 def rows_for_month(month_str: str) -> int:
-    # deterministic variation based on month index so reruns are stable
     months = all_months()
     idx = months.index(month_str)
-    # cycle: 5000, 5500, 6000, 6500, 7000, 7500, 8000, back to 5000
+    # cycles between 5000-8000 in 500-row steps (7 steps)
     return 5000 + (idx % 7) * 500
 
-# ── Data generation ───────────────────────────────────────────────────────────
+# ── Data generation ─────────────────────────────────────────────────────────────
 def generate_rows(month_str: str) -> list[dict]:
-    y, m = map(int, month_str.split("-"))
-    forecast_date = date(y, m, 1)
-    n = rows_for_month(month_str)
-    rows = []
+    y, m   = map(int, month_str.split("-"))
+    f_date = f"{y:04d}-{m:02d}-01"
+    n      = rows_for_month(month_str)
+    rows   = []
 
     for i in range(1, n + 1):
-        region      = REGIONS[i % 4]
-        currency    = CURRENCY_MAP[region]
-        country     = COUNTRY_MAP[region][i % len(COUNTRY_MAP[region])]
-        category    = VALID_CATEGORIES[i % len(VALID_CATEGORIES)]
-        sub_cat     = SUB_MAP[category]
+        region   = REGIONS[i % 4]
+        currency = CURRENCY_MAP[region]
+        country  = COUNTRY_MAP[region][i % len(COUNTRY_MAP[region])]
+        category = VALID_CATEGORIES[i % len(VALID_CATEGORIES)]
+        sub_cat  = SUB_MAP[category]
 
-        # ~2% dirty category
-        if i % 100 == 0:
-            category, sub_cat = "HARDWARE", "LEGACY"
-        elif i % 100 == 1:
-            category, sub_cat = "UNKNOWN", "NA"
-
-        # ~1.5% dirty currency
-        if i % 67 == 0:
-            currency = "XYZ"
+        if i % 100 == 0: category, sub_cat = "HARDWARE", "LEGACY"
+        elif i % 100 == 1: category, sub_cat = "UNKNOWN", "NA"
+        if i % 67  == 0: currency = "XYZ"
 
         qty     = (i * 11 % 9800) + 100
         revenue = qty * ((i * 31 % 450) + 50)
 
         rows.append({
-            "Name":              f"FL-{month_str}-{i:05d}",
-            "Product_Id__c":     f"HPE-PROD-{(i % 500) + 1:04d}",
-            "Location_Id__c":    f"LOC-{(i * 7 % 200) + 1:03d}",
-            "Forecast_Date__c":  str(forecast_date),
-            "Forecast_Qty__c":   str(qty),
-            "Revenue_Amount__c": str(revenue),
-            "Customer_Id__c":    f"CUST-{(i * 13 % 50000) + 10000:05d}",
-            "Channel__c":        CHANNELS[i % 5],
-            "Category__c":       category,
-            "Sub_Category__c":   sub_cat,
-            "Region__c":         region,
-            "Country__c":        country,
-            "Currency_Code__c":  currency,
-            "UOM__c":            "UNIT",
-            "Period_Type__c":    "MONTHLY",
-            "Fiscal_Period__c":  month_str,
+            "product_id":     f"HPE-PROD-{(i % 500) + 1:04d}",
+            "location_id":    f"LOC-{(i * 7 % 200) + 1:03d}",
+            "forecast_date":  f_date,
+            "forecast_qty":   str(qty),
+            "revenue_amount": str(revenue),
+            "customer_id":    f"CUST-{(i * 13 % 50000) + 10000:05d}",
+            "channel":        CHANNELS[i % 5],
+            "category":       category,
+            "sub_category":   sub_cat,
+            "region":         region,
+            "country":        country,
+            "currency_code":  currency,
+            "uom":            "UNIT",
+            "period_type":    "MONTHLY",
+            "fiscal_period":  month_str,
         })
     return rows
 
 def rows_to_csv(rows: list[dict]) -> bytes:
     buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()), lineterminator="\r\n")
-    writer.writeheader()
-    writer.writerows(rows)
+    w   = csv.DictWriter(buf, fieldnames=list(rows[0].keys()), lineterminator="\r\n")
+    w.writeheader()
+    w.writerows(rows)
     return buf.getvalue().encode("utf-8")
 
-# ── Salesforce auth ───────────────────────────────────────────────────────────
-def sf_login(username, password, token, login_url):
-    resp = requests.post(f"{login_url}/services/Soap/u/58.0", headers={
-        "Content-Type": "text/xml; charset=UTF-8", "SOAPAction": "login"
-    }, data=f"""<?xml version="1.0" encoding="utf-8"?>
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
-                  xmlns:urn="urn:partner.soap.sforce.com">
-  <soapenv:Body><urn:login>
-    <urn:username>{username}</urn:username>
-    <urn:password>{password}{token}</urn:password>
-  </urn:login></soapenv:Body>
-</soapenv:Envelope>""")
-    import xml.etree.ElementTree as ET
-    ns   = {"p": "urn:partner.soap.sforce.com"}
-    root = ET.fromstring(resp.text)
-    sid  = root.findtext(".//p:sessionId", namespaces=ns)
-    url  = root.findtext(".//p:serverUrl",  namespaces=ns)
-    return sid, url.split("/services")[0]
+# ── OAuth: username-password flow for Data Cloud ────────────────────────────────
+def get_token() -> tuple[str, str]:
+    """Returns (access_token, instance_url). Caches to disk."""
+    if os.path.exists(TOKEN_CACHE):
+        with open(TOKEN_CACHE) as f:
+            cached = json.load(f)
+        if cached.get("expires_at", 0) > time.time() + 60:
+            print("  Using cached token.")
+            return cached["access_token"], cached["instance_url"]
 
-def bulk_insert(session_id, instance, csv_bytes) -> dict:
-    base    = f"{instance}/services/data/v58.0/jobs/ingest"
-    headers = {"Authorization": f"Bearer {session_id}", "Content-Type": "application/json"}
+    resp = requests.post(f"{DC_ORG_URL}/services/oauth2/token", data={
+        "grant_type":    "password",
+        "client_id":     DC_CLIENT_ID,
+        "client_secret": DC_CLIENT_SECRET,
+        "username":      DC_USERNAME,
+        "password":      DC_PASSWORD,
+    })
+    resp.raise_for_status()
+    data = resp.json()
+    token       = data["access_token"]
+    instance    = data["instance_url"]
 
-    job    = requests.post(base, headers=headers, json={
-        "object": OBJECT_API_NAME, "operation": "insert",
-        "contentType": "CSV", "lineEnding": "CRLF"
-    }).json()
-    job_id = job["id"]
+    with open(TOKEN_CACHE, "w") as f:
+        json.dump({
+            "access_token": token,
+            "instance_url": instance,
+            "expires_at":   time.time() + 7000,  # ~2 hrs
+        }, f)
+    print(f"  Token obtained. Instance: {instance}")
+    return token, instance
 
-    requests.put(f"{base}/{job_id}/batches",
-        headers={**headers, "Content-Type": "text/csv"}, data=csv_bytes)
-    requests.patch(f"{base}/{job_id}", headers=headers,
-        json={"state": "UploadComplete"})
+# ── Data Cloud Ingestion API ────────────────────────────────────────────────────
+def ingest_batch(token: str, instance: str, rows: list[dict]) -> dict:
+    """
+    POST to /api/v1/ingest/jobs  (Bulk Ingestion Job)
+    Docs: Salesforce Data Cloud Developer Guide > Ingestion API
+    """
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type":  "application/json",
+    }
+    base = f"{instance}/api/v1/ingest/jobs"
 
-    for _ in range(30):
-        time.sleep(8)
+    # 1. Create job
+    job = requests.post(base, headers=headers, json={
+        "object":      DC_STREAM_NAME,
+        "sourceName":  DC_STREAM_NAME,
+        "operation":   "upsert",
+    })
+    job.raise_for_status()
+    job_id = job.json()["id"]
+    print(f"    Ingestion job: {job_id}")
+
+    # 2. Upload CSV batch
+    csv_bytes = rows_to_csv(rows)
+    upload = requests.put(
+        f"{base}/{job_id}/batches",
+        headers={**headers, "Content-Type": "text/csv"},
+        data=csv_bytes,
+    )
+    upload.raise_for_status()
+    print(f"    Batch uploaded ({len(csv_bytes):,} bytes)")
+
+    # 3. Close / commit job
+    close = requests.patch(
+        f"{base}/{job_id}",
+        headers=headers,
+        json={"state": "UploadComplete"},
+    )
+    close.raise_for_status()
+
+    # 4. Poll for completion
+    for attempt in range(40):
+        time.sleep(6)
         status = requests.get(f"{base}/{job_id}", headers=headers).json()
         state  = status.get("state", "")
-        if state in ("JobComplete", "Failed", "Aborted"):
+        print(f"    [{attempt+1}] state={state} "
+              f"processed={status.get('recordsProcessed', '?')} "
+              f"failed={status.get('recordsFailed', '?')}")
+        if state in ("Complete", "Failed", "Aborted"):
             break
+
     return status
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-def process_month(month_str, session_id, instance, dry_run):
-    rows      = generate_rows(month_str)
-    csv_bytes = rows_to_csv(rows)
-    out_path  = f"salesforce/data/fullload_{month_str}.csv"
-    with open(out_path, "wb") as f:
-        f.write(csv_bytes)
-    print(f"  [{month_str}] {len(rows):,} rows → {out_path}")
+# ── Main ────────────────────────────────────────────────────────────────────────
+def process_month(month_str: str, token: str, instance: str, dry_run: bool):
+    rows = generate_rows(month_str)
+    print(f"  [{month_str}] {len(rows):,} rows  (forecast_date = {month_str}-01)")
 
-    if not dry_run:
-        result = bulk_insert(session_id, instance, csv_bytes)
-        proc   = result.get("numberRecordsProcessed", 0)
-        fail   = result.get("numberRecordsFailed", 0)
-        print(f"  [{month_str}] state={result.get('state')} processed={proc:,} failed={fail:,}")
-        return proc, fail
-    return len(rows), 0
+    # Always save CSV locally
+    out_path = f"salesforce/data/fullload_{month_str}.csv"
+    with open(out_path, "wb") as f:
+        f.write(rows_to_csv(rows))
+    print(f"    CSV → {out_path}")
+
+    if dry_run:
+        return len(rows), 0
+
+    status = ingest_batch(token, instance, rows)
+    ok   = status.get("recordsProcessed", 0)
+    fail = status.get("recordsFailed", 0)
+    return ok, fail
+
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Data Cloud Full Load — HPE Forecast Monthly")
     group  = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--month",   help="Single month, e.g. 2020-07")
+    group.add_argument("--auth",    action="store_true", help="Obtain + cache OAuth token")
+    group.add_argument("--month",   metavar="YYYY-MM",   help="Upload a single month")
     group.add_argument("--all",     action="store_true", help="Upload all 60 months")
-    group.add_argument("--dry-run", action="store_true", help="Generate CSVs only")
+    group.add_argument("--dry-run", action="store_true", help="Generate CSVs only, no upload")
     args = parser.parse_args()
 
-    months = all_months()
+    months     = all_months()
     total_rows = sum(rows_for_month(m) for m in months)
-    print(f"Full load window: {months[0]} to {months[-1]} ({len(months)} months)")
-    print(f"Total rows across all months: {total_rows:,}")
+    print(f"Window : {months[0]} → {months[-1]}  ({len(months)} months, ~{total_rows:,} rows total)")
+    print(f"Stream : {DC_STREAM_NAME}  |  Org: {DC_ORG_URL}")
 
-    session_id = instance = None
-    dry_run = args.dry_run or False
-
-    if not dry_run:
-        if not SF_PASSWORD or not SF_SECURITY_TOKEN:
-            print("Set SF_PASSWORD and SF_TOKEN env vars.")
-            sys.exit(1)
-        print("Logging into Salesforce...")
-        session_id, instance = sf_login(
-            SF_USERNAME, SF_PASSWORD, SF_SECURITY_TOKEN, SF_LOGIN_URL)
-        print(f"  Instance: {instance}")
+    if args.auth:
+        token, instance = get_token()
+        print(f"Token cached to {TOKEN_CACHE}")
+        return
 
     if args.dry_run:
         for m in months:
             process_month(m, None, None, dry_run=True)
-    elif args.month:
+        print(f"\nDone (dry run). {len(months)} CSVs written to salesforce/data/")
+        return
+
+    if not DC_CLIENT_ID or not DC_PASSWORD:
+        print("Set DC_CLIENT_ID, DC_CLIENT_SECRET, DC_PASSWORD env vars.")
+        sys.exit(1)
+
+    token, instance = get_token()
+
+    if args.month:
         if args.month not in months:
-            print(f"Month {args.month} not in full load window {months[0]}–{months[-1]}")
+            print(f"Month {args.month} not in window {months[0]}–{months[-1]}")
             sys.exit(1)
-        process_month(args.month, session_id, instance, dry_run=False)
+        ok, fail = process_month(args.month, token, instance, dry_run=False)
+        print(f"\nDone. processed={ok:,} failed={fail:,}")
+
     elif args.all:
-        total_proc = total_fail = 0
+        total_ok = total_fail = 0
         for m in months:
-            p, f = process_month(m, session_id, instance, dry_run=False)
-            total_proc += p; total_fail += f
-        print(f"\nDone. Total processed={total_proc:,} failed={total_fail:,}")
+            ok, fail = process_month(m, token, instance, dry_run=False)
+            total_ok   += ok
+            total_fail += fail
+        print(f"\nAll done. Total processed={total_ok:,} failed={total_fail:,}")
+
 
 if __name__ == "__main__":
     main()

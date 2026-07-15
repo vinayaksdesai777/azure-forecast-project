@@ -173,9 +173,9 @@
                                                 },
                                                 "typeProperties": {
                                                     "source": {
-                                                        "type": "SalesforceSource",
+                                                        "type": "SalesforceServiceCloudSource",
                                                         "query": {
-                                                            "value": "@concat('SELECT FIELDS(ALL) FROM ', item().source_object, if(equals(item().load_type, 'incremental'), concat(' WHERE ', item().watermark_column, ' > ', item().last_watermark), ''))",
+                                                            "value": "@concat('SELECT Id, Product_Id__c, Location_Id__c, Forecast_Date__c, Forecast_Qty__c, Revenue_Amount__c, Customer_Id__c, Channel__c, Category__c, Sub_Category__c, Region__c, Country__c, Currency_Code__c, UOM__c, Period_Type__c, Fiscal_Period__c FROM ', item().source_object, if(equals(item().load_type, 'incremental'), concat(' WHERE LastModifiedDate > ', item().last_watermark), ''))",
                                                             "type": "Expression"
                                                         },
                                                         "readBehavior": "query"

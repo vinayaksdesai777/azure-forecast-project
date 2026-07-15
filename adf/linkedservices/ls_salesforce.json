@@ -2,9 +2,9 @@
     "name": "ls_salesforce",
     "type": "Microsoft.DataFactory/factories/linkedservices",
     "properties": {
-        "type": "Salesforce",
+        "type": "SalesforceServiceCloud",
         "typeProperties": {
-            "environmentUrl": "https://login.salesforce.com",
+            "environmentUrl": "https://<your-data-cloud-org>.salesforce.com",
             "username": "<salesforce_user>",
             "password": {
                 "type": "SecureString",
@@ -13,9 +13,10 @@
             "securityToken": {
                 "type": "SecureString",
                 "value": "<salesforce_security_token>"
-            }
+            },
+            "apiVersion": "59.0"
         },
         "annotations": [],
-        "description": "Salesforce source. AutoResolve IR (cloud, no SHIR). Password and security token stored as SecureString — ADF encrypts at publish. Set real values via ADF Studio UI."
+        "description": "Salesforce Data Cloud org (free trial). Uses SalesforceServiceCloud connector — supports Data Cloud DLO objects (dmle__ prefix). environmentUrl = your Data Cloud org URL (not login.salesforce.com). Set real values via ADF Studio UI."
     }
 }
