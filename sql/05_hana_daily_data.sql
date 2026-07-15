@@ -2,8 +2,8 @@
 -- SAP HANA Cloud — Daily Forecast Data (FULL LOAD)
 -- Schema: O9_SOURCE | Table: FORECAST_DAILY + FORECAST_VIEW
 -- Run in HANA Database Explorer (BTP Trial cockpit)
--- Target: ~133,225 rows — Jan 2025 to Dec 2025 (365 days x 365 pairs/day)
--- After this: run 07_hana_daily_delta.sql for Jan-Jul 2026 incremental (9k rows/run)
+-- Target: ~547,800 rows — Jul 2020 to Jun 2025 (1,826 days x 300 rows/day)
+-- After this: run 07_hana_daily_delta.sql for Jul 2025-Jun 2026 incremental (~9k rows/run)
 -- ============================================================
 
 -- Create base table that FORECAST_VIEW sits on top of
@@ -56,15 +56,15 @@ BEGIN
     DECLARE v_row           INTEGER := 0;
     DECLARE v_d             INTEGER;
     DECLARE v_i             INTEGER;
-    DECLARE v_total_days    INTEGER := 365;   -- Jan 2025 to Dec 2025 (full load)
-    DECLARE v_per_day       INTEGER := 365;   -- product-location pairs per day
+    DECLARE v_total_days    INTEGER := 1826;  -- Jul 2020 to Jun 2025 (5-year full load)
+    DECLARE v_per_day       INTEGER := 300;   -- 300 rows/day = ~547,800 total
 
     DELETE FROM "O9_SOURCE"."FORECAST_DAILY";
 
     FOR v_d IN 1..v_total_days DO
 
-        -- Advance date: start 2025-01-01, add (v_d - 1) days
-        v_forecast_date := ADD_DAYS(TO_DATE('2025-01-01'), v_d - 1);
+        -- Advance date: start 2020-07-01, add (v_d - 1) days
+        v_forecast_date := ADD_DAYS(TO_DATE('2020-07-01'), v_d - 1);
 
         -- Fiscal period: YYYY-MM
         v_fiscal := TO_NVARCHAR(YEAR(v_forecast_date)) || '-' ||

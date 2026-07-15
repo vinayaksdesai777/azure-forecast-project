@@ -43,12 +43,16 @@ TBLPROPERTIES (
 -- Seed: one row per data subject
 -- First loads are FULL (load_type='full', last_watermark=NULL).
 -- After first run, update load_type='incremental' and set watermark.
--- ── Full load (Jan-Dec 2025): run once, large historical baseline ──────────
---   Daily    (SAP HANA):    ~133,225 rows — 05_hana_daily_data.sql
---   Quarterly(SAP HANA):     100,000 rows — 04_hana_quarterly_data.sql
---   Weekly   (SQL Server):   ~74,984 rows — 06_sqlserver_weekly_data.sql
---   Monthly  (Salesforce):    84,000 rows — existing bulk CSVs
--- ── Incremental deltas (Jan-Jul 2026): 8-10k rows per ADF run ─────────────
+-- ── Full load (Jul 2020 - Jun 2025): 5-year historical baseline ────────────
+--   Daily    (SAP HANA):   ~547,800 rows — 05_hana_daily_data.sql
+--                            1,826 days x 300 rows/day
+--   Quarterly(SAP HANA):    600,000 rows — 04_hana_quarterly_data.sql
+--                            20 quarters x 30,000 rows/quarter
+--   Weekly   (SQL Server): ~390,000 rows — 06_sqlserver_weekly_data.sql
+--                            260 weeks x 1,500 rows/week
+--   Monthly  (Salesforce): ~390,000 rows — salesforce/generate_full_load.py
+--                            60 months x 5,000-8,000 rows/month
+-- ── Incremental deltas (Jul 2025 - Jun 2026): 8-10k rows per ADF run ──────
 --   Daily    (SAP HANA):      ~9,000 rows/run — 07_hana_daily_delta.sql
 --   Quarterly(SAP HANA):      10,000 rows/run — 08_hana_quarterly_delta.sql
 --   Weekly   (SQL Server):    ~8,500 rows/run — 09_sqlserver_weekly_delta.sql

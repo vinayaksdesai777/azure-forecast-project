@@ -26,9 +26,9 @@ CREATE COLUMN TABLE IF NOT EXISTS "O9_SOURCE"."FORECAST_QUARTERLY" (
 );
 
 -- ============================================================
--- FULL LOAD: 100,000 quarterly rows — 4 quarters (Q1-2025 to Q4-2025)
--- 25,000 rows per quarter across 500 products x 200 locations
--- After this: run 08_hana_quarterly_delta.sql for Q1-Q2 2026 incremental (10k rows/run)
+-- FULL LOAD: 600,000 quarterly rows — 20 quarters (Q3-2020 to Q2-2025)
+-- 30,000 rows per quarter across 500 products x 200 locations
+-- After this: run 08_hana_quarterly_delta.sql for Q3-2025 onwards incremental (10k rows/run)
 -- Includes intentional dirty data (~3%) for DQ pipeline testing
 -- ============================================================
 
@@ -53,19 +53,35 @@ BEGIN
     DECLARE v_row          INTEGER := 0;
 
     -- Lookup arrays (simulated via CASE)
-    DECLARE v_quarters     INTEGER := 4;
-    DECLARE v_rows_per_q   INTEGER := 25000;
+    DECLARE v_quarters     INTEGER := 20;
+    DECLARE v_rows_per_q   INTEGER := 30000;
     DECLARE v_q            INTEGER;
 
     DELETE FROM "O9_SOURCE"."FORECAST_QUARTERLY";
 
     FOR v_q IN 1..v_quarters DO
-        -- Full load: Q1-2025 to Q4-2025 only
+        -- Full load: Q3-2020 to Q2-2025 (20 quarters = 5 years)
         CASE v_q
-            WHEN 1 THEN v_forecast_date := '2025-01-01'; v_fiscal := '2025-Q1';
-            WHEN 2 THEN v_forecast_date := '2025-04-01'; v_fiscal := '2025-Q2';
-            WHEN 3 THEN v_forecast_date := '2025-07-01'; v_fiscal := '2025-Q3';
-            WHEN 4 THEN v_forecast_date := '2025-10-01'; v_fiscal := '2025-Q4';
+            WHEN  1 THEN v_forecast_date := '2020-07-01'; v_fiscal := '2020-Q3';
+            WHEN  2 THEN v_forecast_date := '2020-10-01'; v_fiscal := '2020-Q4';
+            WHEN  3 THEN v_forecast_date := '2021-01-01'; v_fiscal := '2021-Q1';
+            WHEN  4 THEN v_forecast_date := '2021-04-01'; v_fiscal := '2021-Q2';
+            WHEN  5 THEN v_forecast_date := '2021-07-01'; v_fiscal := '2021-Q3';
+            WHEN  6 THEN v_forecast_date := '2021-10-01'; v_fiscal := '2021-Q4';
+            WHEN  7 THEN v_forecast_date := '2022-01-01'; v_fiscal := '2022-Q1';
+            WHEN  8 THEN v_forecast_date := '2022-04-01'; v_fiscal := '2022-Q2';
+            WHEN  9 THEN v_forecast_date := '2022-07-01'; v_fiscal := '2022-Q3';
+            WHEN 10 THEN v_forecast_date := '2022-10-01'; v_fiscal := '2022-Q4';
+            WHEN 11 THEN v_forecast_date := '2023-01-01'; v_fiscal := '2023-Q1';
+            WHEN 12 THEN v_forecast_date := '2023-04-01'; v_fiscal := '2023-Q2';
+            WHEN 13 THEN v_forecast_date := '2023-07-01'; v_fiscal := '2023-Q3';
+            WHEN 14 THEN v_forecast_date := '2023-10-01'; v_fiscal := '2023-Q4';
+            WHEN 15 THEN v_forecast_date := '2024-01-01'; v_fiscal := '2024-Q1';
+            WHEN 16 THEN v_forecast_date := '2024-04-01'; v_fiscal := '2024-Q2';
+            WHEN 17 THEN v_forecast_date := '2024-07-01'; v_fiscal := '2024-Q3';
+            WHEN 18 THEN v_forecast_date := '2024-10-01'; v_fiscal := '2024-Q4';
+            WHEN 19 THEN v_forecast_date := '2025-01-01'; v_fiscal := '2025-Q1';
+            WHEN 20 THEN v_forecast_date := '2025-04-01'; v_fiscal := '2025-Q2';
         END CASE;
 
         FOR v_i IN 1..v_rows_per_q DO
