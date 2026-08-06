@@ -6,8 +6,12 @@
 
 # COMMAND ----------
 
+import sys
 import uuid
 from datetime import datetime
+
+# Add utilities to path — works whether notebooks run from Repos or ADF job
+sys.path.insert(0, "/Workspace/hpe-forecast/utilities")
 
 # COMMAND ----------
 

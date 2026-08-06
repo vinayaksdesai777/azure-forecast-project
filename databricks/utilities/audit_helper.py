@@ -8,7 +8,23 @@
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, TimestampType
 from datetime import datetime
+
+_JOB_LOG_SCHEMA = StructType([
+    StructField("batch_id",         StringType(),  True),
+    StructField("insert_time",      StringType(),  True),
+    StructField("layer",            StringType(),  True),
+    StructField("status",           StringType(),  True),
+    StructField("records_inserted", IntegerType(), True),
+    StructField("records_updated",  IntegerType(), True),
+    StructField("error_records",    IntegerType(), True),
+    StructField("source_system",    StringType(),  True),
+    StructField("data_subject",     StringType(),  True),
+    StructField("object_name",      StringType(),  True),
+    StructField("error_message",    StringType(),  True),
+    StructField("run_id",           StringType(),  True),
+])
 
 
 def write_audit_entry(
@@ -40,7 +56,7 @@ def write_audit_entry(
         "run_id":           run_id,
     }
     (
-        spark.createDataFrame([row])
+        spark.createDataFrame([row], schema=_JOB_LOG_SCHEMA)
         .withColumn("insert_time", F.to_timestamp("insert_time"))
         .write.format("delta").mode("append")
         .saveAsTable("hpe_catalog.audit.job_log")

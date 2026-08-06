@@ -9,25 +9,37 @@
 -- After full load: run 07_hana_daily_delta.sql for Jul 2025-Jun 2026 (~9k rows/run)
 -- ============================================================
 
--- Step 1: Create table (idempotent)
-CREATE COLUMN TABLE IF NOT EXISTS "O9_SOURCE"."FORECAST_DAILY" (
-    "PRODUCT_ID"      NVARCHAR(50)    NOT NULL,
-    "LOCATION_ID"     NVARCHAR(50)    NOT NULL,
-    "FORECAST_DATE"   DATE            NOT NULL,
-    "FORECAST_QTY"    DECIMAL(12,2),
-    "REVENUE_AMOUNT"  DECIMAL(16,2),
-    "CUSTOMER_ID"     NVARCHAR(50),
-    "CHANNEL"         NVARCHAR(50),
-    "CATEGORY"        NVARCHAR(50),
-    "SUB_CATEGORY"    NVARCHAR(50),
-    "REGION"          NVARCHAR(50),
-    "COUNTRY"         NVARCHAR(10),
-    "CURRENCY"        NVARCHAR(10),
-    "UOM"             NVARCHAR(20),
-    "PERIOD_TYPE"     NVARCHAR(20)    DEFAULT 'DAILY',
-    "FISCAL_PERIOD"   NVARCHAR(20),
-    "CHANGED_ON"      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP
-);
+DO
+BEGIN
+    DECLARE tbl_count INT;
+
+    SELECT COUNT(*) INTO tbl_count
+    FROM SYS.TABLES
+    WHERE SCHEMA_NAME = 'O9_SOURCE'
+      AND TABLE_NAME  = 'FORECAST_DAILY';
+
+    IF :tbl_count = 0 THEN
+        EXEC '
+        CREATE COLUMN TABLE "O9_SOURCE"."FORECAST_DAILY" (
+            "PRODUCT_ID"      NVARCHAR(50)    NOT NULL,
+            "LOCATION_ID"     NVARCHAR(50)    NOT NULL,
+            "FORECAST_DATE"   DATE            NOT NULL,
+            "FORECAST_QTY"    DECIMAL(12,2),
+            "REVENUE_AMOUNT"  DECIMAL(16,2),
+            "CUSTOMER_ID"     NVARCHAR(50),
+            "CHANNEL"         NVARCHAR(50),
+            "CATEGORY"        NVARCHAR(50),
+            "SUB_CATEGORY"    NVARCHAR(50),
+            "REGION"          NVARCHAR(50),
+            "COUNTRY"         NVARCHAR(10),
+            "CURRENCY"        NVARCHAR(10),
+            "UOM"             NVARCHAR(20),
+            "PERIOD_TYPE"     NVARCHAR(20)    DEFAULT ''DAILY'',
+            "FISCAL_PERIOD"   NVARCHAR(20),
+            "CHANGED_ON"      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP
+        )';
+    END IF;
+END;
 
 -- Step 2: Create view (ADF reads from this; filtered by CHANGED_ON for incremental)
 CREATE OR REPLACE VIEW "O9_SOURCE"."FORECAST_VIEW" AS
@@ -89,48 +101,75 @@ BEGIN
             v_location_id := 'LOC-' || LPAD(TO_NVARCHAR(MOD(v_row * 7, 200) + 1), 3, '0');
             v_customer_id := 'CUST-' || LPAD(TO_NVARCHAR(MOD(v_row * 13, 50000) + 10000), 5, '0');
 
-            CASE MOD(v_row, 5)
-                WHEN 0 THEN v_channel := 'DIRECT';
-                WHEN 1 THEN v_channel := 'ONLINE';
-                WHEN 2 THEN v_channel := 'PARTNER';
-                WHEN 3 THEN v_channel := 'DISTRIBUTOR';
-                ELSE        v_channel := 'VAR';
-            END CASE;
+            v_channel := CASE MOD(v_row, 5)
+                WHEN 0 THEN 'DIRECT'
+                WHEN 1 THEN 'ONLINE'
+                WHEN 2 THEN 'PARTNER'
+                WHEN 3 THEN 'DISTRIBUTOR'
+                ELSE        'VAR'
+            END;
 
-            CASE MOD(v_row, 7)
-                WHEN 0 THEN v_category := 'SERVER';         v_sub_category := 'PROLIANT';
-                WHEN 1 THEN v_category := 'STORAGE';        v_sub_category := 'PRIMERA';
-                WHEN 2 THEN v_category := 'COMPUTE';        v_sub_category := 'SYNERGY';
-                WHEN 3 THEN v_category := 'NETWORKING';     v_sub_category := 'ARUBA';
-                WHEN 4 THEN v_category := 'PRIVATE_CLOUD';  v_sub_category := 'GREENLAKE';
-                WHEN 5 THEN v_category := 'SUPERCOMPUTING'; v_sub_category := 'CRAY_EX';
-                ELSE        v_category := 'AI';             v_sub_category := 'AI_CLUSTER';
-            END CASE;
+            v_category := CASE MOD(v_row, 7)
+                WHEN 0 THEN 'SERVER'
+                WHEN 1 THEN 'STORAGE'
+                WHEN 2 THEN 'COMPUTE'
+                WHEN 3 THEN 'NETWORKING'
+                WHEN 4 THEN 'PRIVATE_CLOUD'
+                WHEN 5 THEN 'SUPERCOMPUTING'
+                ELSE        'AI'
+            END;
 
-            CASE MOD(v_row, 100)
-                WHEN 0 THEN v_category := 'HARDWARE'; v_sub_category := 'LEGACY';
-                WHEN 1 THEN v_category := 'UNKNOWN';  v_sub_category := 'NA';
-                WHEN 2 THEN v_category := 'MISC';     v_sub_category := 'OTHER';
-                ELSE        v_category := v_category; v_sub_category := v_sub_category;
-            END CASE;
+            v_sub_category := CASE MOD(v_row, 7)
+                WHEN 0 THEN 'PROLIANT'
+                WHEN 1 THEN 'PRIMERA'
+                WHEN 2 THEN 'SYNERGY'
+                WHEN 3 THEN 'ARUBA'
+                WHEN 4 THEN 'GREENLAKE'
+                WHEN 5 THEN 'CRAY_EX'
+                ELSE        'AI_CLUSTER'
+            END;
 
-            CASE MOD(v_row, 4)
-                WHEN 0 THEN v_region := 'NORTH_AMERICA'; v_currency := 'USD';
-                WHEN 1 THEN v_region := 'EMEA';          v_currency := 'EUR';
-                WHEN 2 THEN v_region := 'APJ';           v_currency := 'SGD';
-                ELSE        v_region := 'LATAM';         v_currency := 'BRL';
-            END CASE;
+            -- Dirty-data overrides
+            v_category := CASE MOD(v_row, 100)
+                WHEN 0 THEN 'HARDWARE'
+                WHEN 1 THEN 'UNKNOWN'
+                WHEN 2 THEN 'MISC'
+                ELSE        v_category
+            END;
 
-            CASE v_region
-                WHEN 'NORTH_AMERICA' THEN
-                    CASE MOD(v_row, 2) WHEN 0 THEN v_country := 'US'; ELSE v_country := 'CA'; END CASE;
-                WHEN 'EMEA' THEN
-                    CASE MOD(v_row, 3) WHEN 0 THEN v_country := 'DE'; WHEN 1 THEN v_country := 'FR'; ELSE v_country := 'UK'; END CASE;
-                WHEN 'APJ' THEN
-                    CASE MOD(v_row, 3) WHEN 0 THEN v_country := 'JP'; WHEN 1 THEN v_country := 'IN'; ELSE v_country := 'SG'; END CASE;
-                ELSE
-                    CASE MOD(v_row, 2) WHEN 0 THEN v_country := 'BR'; ELSE v_country := 'MX'; END CASE;
-            END CASE;
+            v_sub_category := CASE MOD(v_row, 100)
+                WHEN 0 THEN 'LEGACY'
+                WHEN 1 THEN 'NA'
+                WHEN 2 THEN 'OTHER'
+                ELSE        v_sub_category
+            END;
+
+            v_region := CASE MOD(v_row, 4)
+                WHEN 0 THEN 'NORTH_AMERICA'
+                WHEN 1 THEN 'EMEA'
+                WHEN 2 THEN 'APJ'
+                ELSE        'LATAM'
+            END;
+
+            v_currency := CASE MOD(v_row, 4)
+                WHEN 0 THEN 'USD'
+                WHEN 1 THEN 'EUR'
+                WHEN 2 THEN 'SGD'
+                ELSE        'BRL'
+            END;
+
+            v_country := CASE
+                WHEN v_region = 'NORTH_AMERICA' AND MOD(v_row, 2) = 0 THEN 'US'
+                WHEN v_region = 'NORTH_AMERICA'                      THEN 'CA'
+                WHEN v_region = 'EMEA' AND MOD(v_row, 3) = 0         THEN 'DE'
+                WHEN v_region = 'EMEA' AND MOD(v_row, 3) = 1         THEN 'FR'
+                WHEN v_region = 'EMEA'                               THEN 'UK'
+                WHEN v_region = 'APJ' AND MOD(v_row, 3) = 0          THEN 'JP'
+                WHEN v_region = 'APJ' AND MOD(v_row, 3) = 1          THEN 'IN'
+                WHEN v_region = 'APJ'                                THEN 'SG'
+                WHEN MOD(v_row, 2) = 0                                THEN 'BR'
+                ELSE                                                      'MX'
+            END;
 
             v_currency := CASE WHEN MOD(v_row, 67) = 0 THEN 'XYZ' ELSE v_currency END;
 
@@ -159,6 +198,9 @@ END;
 -- Wait for "Statement executed" before running the next one.
 -- Total: 18 x 100 + 26 = 1,826 days → ~547,800 rows
 -- ============================================================
+
+ALTER TABLE "O9_SOURCE"."FORECAST_DAILY"
+ALTER ("PRODUCT_ID" NVARCHAR(50) NULL);
 
 -- Batch  1: days   1-100  (2020-07-01 to 2020-10-08)
 CALL "O9_SOURCE"."LOAD_DAILY_FORECAST"(1, 100);

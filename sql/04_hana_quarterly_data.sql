@@ -10,25 +10,38 @@
 -- ============================================================
 
 -- Step 1: Create table (idempotent)
-CREATE COLUMN TABLE IF NOT EXISTS "O9_SOURCE"."FORECAST_QUARTERLY" (
-    "PRODUCT_ID"      NVARCHAR(50)    NOT NULL,
-    "LOCATION_ID"     NVARCHAR(50)    NOT NULL,
-    "FORECAST_DATE"   DATE            NOT NULL,
-    "FORECAST_QTY"    DECIMAL(12,2),
-    "REVENUE_AMOUNT"  DECIMAL(16,2),
-    "CUSTOMER_ID"     NVARCHAR(50),
-    "CHANNEL"         NVARCHAR(50),
-    "CATEGORY"        NVARCHAR(50),
-    "SUB_CATEGORY"    NVARCHAR(50),
-    "REGION"          NVARCHAR(50),
-    "COUNTRY"         NVARCHAR(10),
-    "CURRENCY"        NVARCHAR(10),
-    "UOM"             NVARCHAR(20),
-    "PERIOD_TYPE"     NVARCHAR(20)    DEFAULT 'QUARTERLY',
-    "FISCAL_PERIOD"   NVARCHAR(20),
-    "CHANGED_ON"      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP
-);
-
+DO
+BEGIN
+    DECLARE tbl_count INT;
+ 
+    SELECT COUNT(*) INTO tbl_count
+    FROM SYS.TABLES
+    WHERE SCHEMA_NAME = 'O9_SOURCE'
+      AND TABLE_NAME  = 'FORECAST_QUARTERLY';
+ 
+    IF :tbl_count = 0 THEN
+        EXEC '
+        CREATE COLUMN TABLE "O9_SOURCE"."FORECAST_QUARTERLY" (
+            "PRODUCT_ID"      NVARCHAR(50),
+            "LOCATION_ID"     NVARCHAR(50)    NOT NULL,
+            "FORECAST_DATE"   DATE            NOT NULL,
+            "FORECAST_QTY"    DECIMAL(12,2),
+            "REVENUE_AMOUNT"  DECIMAL(16,2),
+            "CUSTOMER_ID"     NVARCHAR(50),
+            "CHANNEL"         NVARCHAR(50),
+            "CATEGORY"        NVARCHAR(50),
+            "SUB_CATEGORY"    NVARCHAR(50),
+            "REGION"          NVARCHAR(50),
+            "COUNTRY"         NVARCHAR(10),
+            "CURRENCY"        NVARCHAR(10),
+            "UOM"             NVARCHAR(20),
+            "PERIOD_TYPE"     NVARCHAR(20)    DEFAULT ''QUARTERLY'',
+            "FISCAL_PERIOD"   NVARCHAR(20),
+            "CHANGED_ON"      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP
+        )';
+    END IF;
+END;
+ 
 -- Step 2: Clear any previous data (safe to re-run)
 DELETE FROM "O9_SOURCE"."FORECAST_QUARTERLY";
 COMMIT;
@@ -181,6 +194,9 @@ END;
 -- Wait for "Statement executed" before running the next one.
 -- Total: 4 x 5 quarters x 30,000 = 600,000 rows
 -- ============================================================
+
+ALTER TABLE "O9_SOURCE"."FORECAST_QUARTERLY"
+ALTER ("PRODUCT_ID" NVARCHAR(50) NULL);
 
 -- Batch 1: Q3-2020 to Q3-2021  (quarters  1-5)
 CALL "O9_SOURCE"."LOAD_QUARTERLY_FORECAST"(1, 5);

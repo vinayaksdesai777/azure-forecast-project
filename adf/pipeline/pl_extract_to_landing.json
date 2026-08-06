@@ -1,7 +1,7 @@
 {
     "name": "pl_extract_to_landing",
     "properties": {
-        "description": "Metadata-driven source extraction. Gets extract config from Unity Catalog via 00_get_metadata notebook (no Azure SQL). Extracts SAP HANA / SQL Server / Salesforce into landing Parquet. Updates watermark via 00_update_watermark notebook after each successful copy.",
+        "description": "Metadata-driven source extraction. Gets extract config from Unity Catalog via 00_get_metadata notebook (no Azure SQL). Extracts SAP HANA (Databricks JDBC) / SQL Server / Salesforce into landing Parquet. Updates watermark via 00_update_watermark notebook after each successful copy.",
         "activities": [
             {
                 "name": "Get Extract Metadata",
@@ -9,7 +9,7 @@
                 "type": "DatabricksNotebook",
                 "dependsOn": [],
                 "policy": {
-                    "timeout": "0.00:05:00",
+                    "timeout": "0.00:15:00",
                     "retry": 1,
                     "retryIntervalInSeconds": 30
                 },
@@ -35,11 +35,11 @@
                 ],
                 "typeProperties": {
                     "items": {
-                        "value": "@json(activity('Get Extract Metadata').output.runOutput)",
+                        "value": "@activity('Get Extract Metadata').output.runOutput",
                         "type": "Expression"
                     },
                     "isSequential": false,
-                    "batchCount": 4,
+                    "batchCount": 2,
                     "activities": [
                         {
                             "name": "Extract Source",
@@ -55,8 +55,9 @@
                                         "value": "SapHana",
                                         "activities": [
                                             {
-                                                "name": "Copy SAP HANA to Landing",
-                                                "type": "Copy",
+                                                "name": "Ingest HANA to Landing",
+                                                "description": "Reads SAP HANA Cloud via Databricks JDBC (ngdbc.jar). Replaces ADF Copy Activity which requires HDB_CLIENT_WITH_CRYPTO (unavailable on tools.hana.ondemand.com).",
+                                                "type": "DatabricksNotebook",
                                                 "dependsOn": [],
                                                 "policy": {
                                                     "timeout": "0.02:00:00",
@@ -64,44 +65,17 @@
                                                     "retryIntervalInSeconds": 60
                                                 },
                                                 "typeProperties": {
-                                                    "source": {
-                                                        "type": "SapHanaSource",
-                                                        "query": {
-                                                            "value": "@concat('SELECT * FROM \"', item().source_schema, '\".\"', item().source_object, '\"', if(equals(item().load_type, 'incremental'), concat(' WHERE \"', item().watermark_column, '\" > ''', item().last_watermark, ''''), ''))",
-                                                            "type": "Expression"
-                                                        }
-                                                    },
-                                                    "sink": {
-                                                        "type": "ParquetSink",
-                                                        "storeSettings": {
-                                                            "type": "AzureBlobFSWriteSettings"
-                                                        },
-                                                        "formatSettings": {
-                                                            "type": "ParquetWriteSettings"
-                                                        }
-                                                    },
-                                                    "enableStaging": false
+                                                    "notebookPath": "/Repos/hpe-forecast/databricks/notebooks/01_ingest_hana_to_landing",
+                                                    "baseParameters": {
+                                                        "data_subject":  "@item().data_subject",
+                                                        "run_id":        "@pipeline().RunId",
+                                                        "new_watermark": "@utcNow('yyyy-MM-dd HH:mm:ss')"
+                                                    }
                                                 },
-                                                "inputs": [
-                                                    {
-                                                        "referenceName": "ds_sap_hana_table",
-                                                        "type": "DatasetReference",
-                                                        "parameters": {
-                                                            "schemaName": "@item().source_schema",
-                                                            "tableName": "@item().source_object"
-                                                        }
-                                                    }
-                                                ],
-                                                "outputs": [
-                                                    {
-                                                        "referenceName": "ds_landing_parquet",
-                                                        "type": "DatasetReference",
-                                                        "parameters": {
-                                                            "folderPath": "@item().landing_path",
-                                                            "fileName": "@concat(item().data_subject, '_', utcNow('yyyyMMddHHmmss'), '.parquet')"
-                                                        }
-                                                    }
-                                                ]
+                                                "linkedServiceName": {
+                                                    "referenceName": "ls_databricks",
+                                                    "type": "LinkedServiceReference"
+                                                }
                                             }
                                         ]
                                     },
@@ -173,9 +147,9 @@
                                                 },
                                                 "typeProperties": {
                                                     "source": {
-                                                        "type": "SalesforceServiceCloudSource",
+                                                        "type": "SalesforceV2Source",
                                                         "query": {
-                                                            "value": "@concat('SELECT Id, Product_Id__c, Location_Id__c, Forecast_Date__c, Forecast_Qty__c, Revenue_Amount__c, Customer_Id__c, Channel__c, Category__c, Sub_Category__c, Region__c, Country__c, Currency_Code__c, UOM__c, Period_Type__c, Fiscal_Period__c FROM ', item().source_object, if(equals(item().load_type, 'incremental'), concat(' WHERE LastModifiedDate > ', item().last_watermark), ''))",
+                                                            "value": "@concat('SELECT Id, Product_Id__c, Location_Id__c, Forecast_Date__c, Forecast_Qty__c, Revenue_Amount__c, Customer_Id__c, Channel__c, Category__c, Sub_Category__c, Region__c, Country__c, Currency_Code__c, UOM__c, Period_Type__c, Fiscal_Period__c FROM ', item().source_object, if(equals(item().load_type, 'incremental'), concat(' WHERE LastModifiedDate > ', replace(replace(item().last_watermark, ' ', 'T'), 'Z', ''), 'Z'), ''))",
                                                             "type": "Expression"
                                                         },
                                                         "readBehavior": "query"

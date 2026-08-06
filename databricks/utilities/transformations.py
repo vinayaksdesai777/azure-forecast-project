@@ -8,7 +8,7 @@
 # COMMAND ----------
 
 from abc import ABC, abstractmethod
-from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 from delta.tables import DeltaTable
 
@@ -162,6 +162,7 @@ def apply_scd2_merge(
     merge_keys: list,
     tracked_cols: list,
     num_partitions: int = 8,
+    storage_path: str = None,
 ) -> tuple:
     """
     Performs a two-step SCD Type 2 MERGE into target_table.
@@ -173,18 +174,25 @@ def apply_scd2_merge(
         records_updated  : int (rows expired)
     """
     if not spark.catalog.tableExists(target_table):
-        (
+        writer = (
             incoming_df
             .repartition(num_partitions)
             .write.format("delta")
             .mode("overwrite")
             .option("overwriteSchema", "true")
             .partitionBy("_ingestion_date")
-            .saveAsTable(target_table)
         )
+        if storage_path:
+            writer = writer.option("path", storage_path)
+        writer.saveAsTable(target_table)
         inserted = incoming_df.count()
         print(f"  [SCD2] First load — inserted: {inserted}")
         return inserted, 0
+
+    # Deduplicate on merge keys — Delta MERGE requires at most one source row per target row
+    incoming_df = incoming_df.withColumn("_mono_id", F.monotonically_increasing_id())
+    _w = Window.partitionBy(*merge_keys).orderBy(F.col("_mono_id"))
+    incoming_df = incoming_df.withColumn("_rn", F.row_number().over(_w)).filter(F.col("_rn") == 1).drop("_rn", "_mono_id")
 
     target_dt     = DeltaTable.forName(spark, target_table)
     merge_cond    = " AND ".join([f"existing.{k} = incoming.{k}" for k in merge_keys])

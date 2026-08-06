@@ -10,6 +10,9 @@
 
 # COMMAND ----------
 
+import sys
+sys.path.insert(0, "/Workspace/hpe-forecast")
+
 from pyspark.sql import functions as F
 from utilities.audit_helper    import write_audit_entry, mark_audit_failed, log_dq_result
 from utilities.dq_checks       import DomainCheck, run_dq_checks
@@ -45,7 +48,8 @@ print(f"Source : {bronze_table} | Target : {silver_table} | batch_id : {batch_id
 
 # COMMAND ----------
 
-bronze_df = spark.table(bronze_table)
+frequency = metadata["frequency"]
+bronze_df = spark.table(bronze_table).filter(F.col("_frequency") == frequency)
 src_count = bronze_df.count()
 print(f"Bronze records: {src_count}")
 
@@ -95,11 +99,13 @@ curr_fail_count = next((r["records_failed"] for r in dq_results if "CURRENCY" in
 
 # COMMAND ----------
 
-merge_keys   = ["product_id", "location_id", "forecast_date", "_frequency"]
-tracked_cols = ["forecast_qty", "revenue_amount", "customer_id", "channel",
+merge_keys   = ["product_id", "location_id", "forecast_date", "channel", "customer_id", "_frequency"]
+tracked_cols = ["forecast_qty", "revenue_amount",
                 "category", "sub_category", "region", "country", "currency", "uom"]
 
 try:
+    # External table — Delta files stored in hpeforecastadls/silver/<data_subject>/
+    silver_path = get_adls_path("silver", data_subject)
     records_inserted, records_updated = apply_scd2_merge(
         spark=spark,
         incoming_df=typed_df,
@@ -107,6 +113,7 @@ try:
         merge_keys=merge_keys,
         tracked_cols=tracked_cols,
         num_partitions=num_partitions,
+        storage_path=silver_path,
     )
 except Exception as e:
     mark_audit_failed(spark, batch_id=batch_id, layer="silver", object_name=silver_table,

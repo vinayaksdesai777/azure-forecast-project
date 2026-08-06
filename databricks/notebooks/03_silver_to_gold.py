@@ -11,6 +11,9 @@
 
 # COMMAND ----------
 
+import sys
+sys.path.insert(0, "/Workspace/hpe-forecast")
+
 from pyspark.sql import functions as F
 from delta.tables import DeltaTable
 from utilities.audit_helper import write_audit_entry, mark_audit_failed
@@ -78,10 +81,16 @@ else:
 
 # COMMAND ----------
 
+from pyspark.sql import Window as _W
+# One row per product_id — pick the most common category/sub_category combination
+_prod_w = _W.partitionBy("product_id").orderBy(F.col("_mono_id"))
 dim_product_src = (
     gold_df
+    .withColumn("_mono_id", F.monotonically_increasing_id())
+    .withColumn("_rn", F.row_number().over(_prod_w))
+    .filter(F.col("_rn") == 1)
+    .drop("_rn", "_mono_id")
     .select("product_id", "category", "sub_category")
-    .distinct()
     .withColumn("is_active",     F.lit(True))
     .withColumn("effective_from", F.current_date())
     .withColumn("effective_to",   F.lit(None).cast("date"))
@@ -91,7 +100,8 @@ dim_product_src = (
 dim_product_table = f"{GOLD_SCHEMA}.dim_product"
 
 if not spark.catalog.tableExists(dim_product_table):
-    dim_product_src.write.format("delta").mode("overwrite").saveAsTable(dim_product_table)
+    dim_product_src.write.format("delta").mode("overwrite") \
+        .option("path", get_adls_path("gold", "dim_product")).saveAsTable(dim_product_table)
 else:
     DeltaTable.forName(spark, dim_product_table).alias("existing").merge(
         dim_product_src.alias("incoming"),
@@ -110,10 +120,14 @@ print(f"dim_product updated: {spark.table(dim_product_table).count()} rows")
 
 # COMMAND ----------
 
+_loc_w = _W.partitionBy("location_id").orderBy(F.col("_mono_id2"))
 dim_location_src = (
     gold_df
+    .withColumn("_mono_id2", F.monotonically_increasing_id())
+    .withColumn("_rn", F.row_number().over(_loc_w))
+    .filter(F.col("_rn") == 1)
+    .drop("_rn", "_mono_id2")
     .select("location_id", "region", "country")
-    .distinct()
     .withColumn("is_active",      F.lit(True))
     .withColumn("effective_from", F.current_date())
     .withColumn("effective_to",   F.lit(None).cast("date"))
@@ -123,7 +137,8 @@ dim_location_src = (
 dim_location_table = f"{GOLD_SCHEMA}.dim_location"
 
 if not spark.catalog.tableExists(dim_location_table):
-    dim_location_src.write.format("delta").mode("overwrite").saveAsTable(dim_location_table)
+    dim_location_src.write.format("delta").mode("overwrite") \
+        .option("path", get_adls_path("gold", "dim_location")).saveAsTable(dim_location_table)
 else:
     DeltaTable.forName(spark, dim_location_table).alias("existing").merge(
         dim_location_src.alias("incoming"),
@@ -162,7 +177,8 @@ dim_time_src = (
 )
 
 if not spark.catalog.tableExists(dim_time_table):
-    dim_time_src.write.format("delta").mode("overwrite").saveAsTable(dim_time_table)
+    dim_time_src.write.format("delta").mode("overwrite") \
+        .option("path", get_adls_path("gold", "dim_time")).saveAsTable(dim_time_table)
 else:
     DeltaTable.forName(spark, dim_time_table).alias("existing").merge(
         dim_time_src.alias("incoming"),
@@ -184,16 +200,24 @@ fact_df = (
     .withColumn("_batch_id",     F.lit(batch_id))
 )
 
-fact_merge_keys = ["product_id", "location_id", "forecast_date", "channel", "_frequency"]
+fact_merge_keys = ["product_id", "location_id", "forecast_date", "channel", "customer_id", "_frequency"]
+
+# Deduplicate on merge keys — Delta MERGE requires at most one source row per target row
+from pyspark.sql import Window
+fact_df = fact_df.withColumn("_mono_id", F.monotonically_increasing_id())
+_w = Window.partitionBy(*fact_merge_keys).orderBy(F.col("_mono_id"))
+fact_df = fact_df.withColumn("_rn", F.row_number().over(_w)).filter(F.col("_rn") == 1).drop("_rn", "_mono_id")
 
 try:
     if not spark.catalog.tableExists(gold_table):
+        gold_path = get_adls_path("gold", data_subject)
         (
             fact_df
             .repartition(num_partitions)
             .write.format("delta")
             .mode("overwrite")
             .option("overwriteSchema", "true")
+            .option("path", gold_path)
             .partitionBy("period", "_frequency")
             .saveAsTable(gold_table)
         )
@@ -225,10 +249,13 @@ except Exception as e:
 
 # COMMAND ----------
 
-archive_path = get_adls_path(CONTAINER_ARCHIVE, f"silver/{data_subject}/{load_job_nr}/")
-silver_path  = get_adls_path("silver", data_subject)
-dbutils.fs.cp(silver_path, archive_path, recurse=True)
-print(f"Silver archived to: {archive_path}")
+try:
+    archive_path = get_adls_path(CONTAINER_ARCHIVE, f"silver/{data_subject}/{load_job_nr}/")
+    silver_path  = get_adls_path(CONTAINER_LANDING, f"silver/{data_subject}/")
+    dbutils.fs.cp(silver_path, archive_path, recurse=True)
+    print(f"Silver archived to: {archive_path}")
+except Exception as arch_e:
+    print(f"Archive skipped (no raw Silver path): {arch_e}")
 
 # COMMAND ----------
 

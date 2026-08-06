@@ -10,6 +10,9 @@
 
 # COMMAND ----------
 
+import sys
+sys.path.insert(0, "/Workspace/hpe-forecast")
+
 from utilities.audit_helper    import write_audit_entry, mark_audit_failed
 from utilities.dq_checks       import NullPKCheck, DedupCheck, run_dq_checks
 from utilities.transformations import AddAuditColumnsTransform, StandardizeTransform, apply_transforms
@@ -45,8 +48,36 @@ print(f"data_subject : {data_subject} | batch_id : {batch_id}")
 
 # COMMAND ----------
 
+_SF_COL_MAP = {
+    "id": None,  # drop Salesforce system Id column
+    "product_id__c": "product_id", "location_id__c": "location_id",
+    "forecast_date__c": "forecast_date", "forecast_qty__c": "forecast_qty",
+    "revenue_amount__c": "revenue_amount", "customer_id__c": "customer_id",
+    "channel__c": "channel", "category__c": "category",
+    "sub_category__c": "sub_category", "region__c": "region",
+    "country__c": "country", "currency_code__c": "currency",
+    "uom__c": "uom", "period_type__c": "_period_type",
+    "fiscal_period__c": "_fiscal_period",
+}
+
 try:
-    raw_df = spark.read.format("parquet").load(source_path)
+    # Use glob to skip zero-byte ADLS placeholder blobs in the landing folder
+    glob_path = source_path.rstrip("/") + "/*.parquet"
+    raw_df = spark.read.format("parquet").load(glob_path)
+    # Normalize column names to lowercase (HANA returns UPPERCASE, Salesforce has __c suffix)
+    raw_df = raw_df.toDF(*[c.lower() for c in raw_df.columns])
+    # Rename Salesforce __c columns to standard names
+    if source_system == "SALESFORCE":
+        from pyspark.sql import functions as F
+        for old_col, new_col in _SF_COL_MAP.items():
+            if old_col in raw_df.columns:
+                if new_col is None:
+                    raw_df = raw_df.drop(old_col)
+                else:
+                    raw_df = raw_df.withColumnRenamed(old_col, new_col)
+    # Cast all columns to STRING — Bronze is schema-on-read, all sources land as strings
+    from pyspark.sql import functions as F
+    raw_df = raw_df.select([F.col(c).cast("string").alias(c) for c in raw_df.columns])
 except Exception as e:
     mark_audit_failed(spark, batch_id=batch_id, layer="bronze", object_name=bronze_table,
                       error_message=str(e), source_system=source_system,
@@ -105,16 +136,17 @@ print(f"After DQ — clean: {final_count} | quarantined: {total_quarantined}")
 # COMMAND ----------
 
 try:
+    # External table — Delta files stored in hpeforecastadls/bronze/, registered in Unity Catalog
+    bronze_path = get_adls_path("bronze", "o9_forecast_raw")
     (
-        clean_df
-        .repartition(num_partitions)
-        .write.format("delta")
-        .mode("overwrite")
-        .option("overwriteSchema", "true")
-        .option("replaceWhere", f"_frequency = '{frequency}' AND date(_ingestion_ts) = current_date()")
+        clean_df.repartition(num_partitions).write.format("delta")
+        .mode("append")
+        .option("mergeSchema", "true")
+        .option("path", bronze_path)
+        .partitionBy("_frequency")
         .saveAsTable(bronze_table)
     )
-    print(f"Bronze written: {bronze_table} | rows: {spark.table(bronze_table).count()}")
+    print(f"Bronze written: {bronze_table} | path: {bronze_path} | rows: {spark.table(bronze_table).count()}")
 except Exception as e:
     mark_audit_failed(spark, batch_id=batch_id, layer="bronze", object_name=bronze_table,
                       error_message=str(e), source_system=source_system,
