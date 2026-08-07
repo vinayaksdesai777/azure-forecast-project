@@ -10,8 +10,8 @@
 
 # COMMAND ----------
 
-import sys
-sys.path.insert(0, "/Workspace/hpe-forecast")
+# sys.path for utilities/ is set by 00_config (%run above), derived from the
+# notebook's own location so it works from any clone path.
 
 from utilities.audit_helper    import write_audit_entry, mark_audit_failed
 from utilities.dq_checks       import NullPKCheck, DedupCheck, run_dq_checks

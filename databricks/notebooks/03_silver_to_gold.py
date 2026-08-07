@@ -11,9 +11,8 @@
 
 # COMMAND ----------
 
-import sys
-sys.path.insert(0, "/Workspace/hpe-forecast")
-
+# sys.path for utilities/ is set by 00_config (%run above), derived from the
+# notebook's own location so it works from any clone path.
 from pyspark.sql import functions as F
 from delta.tables import DeltaTable
 from utilities.audit_helper import write_audit_entry, mark_audit_failed

@@ -10,9 +10,22 @@ import sys
 import uuid
 from datetime import datetime
 
-# Add the repo root to path so `from utilities.x import y` resolves.
-# Must be the parent of utilities/, not utilities/ itself.
-sys.path.insert(0, "/Workspace/hpe-forecast")
+# Make `from utilities.x import y` resolve regardless of where the repo is cloned.
+# utilities/ is a sibling of notebooks/ under databricks/, so the directory we need
+# on sys.path is the notebook's own parent. Derived at runtime rather than hardcoded:
+# the clone location changes between Repos layouts (/Workspace/Repos/<email>/...,
+# /Workspace/Users/<email>/...) and hardcoding it has broken this twice already.
+def _repo_databricks_dir() -> str:
+    nb_path = (
+        dbutils.notebook.entry_point.getDbutils()
+        .notebook().getContext().notebookPath().get()
+    )                                        # e.g. /Users/<email>/<repo>/databricks/notebooks/00_config
+    notebooks_dir = "/".join(nb_path.split("/")[:-1])   # .../databricks/notebooks
+    return "/Workspace" + "/".join(notebooks_dir.split("/")[:-1])   # .../databricks
+
+UTILITIES_PARENT = _repo_databricks_dir()
+if UTILITIES_PARENT not in sys.path:
+    sys.path.insert(0, UTILITIES_PARENT)
 
 # COMMAND ----------
 
