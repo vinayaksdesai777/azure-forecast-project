@@ -1,10 +1,8 @@
-# Databricks notebook source
-# MAGIC %md
-# MAGIC # Audit Helper Utility
-# MAGIC Writes job tracking and DQ entries to hpe_catalog.audit (Unity Catalog Delta).
-# MAGIC No Azure SQL. No JDBC.
-
-# COMMAND ----------
+"""
+Audit Helper Utility
+Writes job tracking and DQ entries to hpe_catalog.audit (Unity Catalog Delta).
+No Azure SQL. No JDBC.
+"""
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F

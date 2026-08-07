@@ -1,11 +1,9 @@
-# Databricks notebook source
-# MAGIC %md
-# MAGIC # DQ Checks Utility — Strategy Pattern
-# MAGIC Each check is a strategy: same interface, different behaviour.
-# MAGIC Notebooks compose a list of checks and execute them in order.
-# MAGIC Adding a new check = new class, zero notebook changes.
-
-# COMMAND ----------
+"""
+DQ Checks Utility — Strategy Pattern
+Each check is a strategy: same interface, different behaviour.
+Notebooks compose a list of checks and execute them in order.
+Adding a new check = new class, zero notebook changes.
+"""
 
 from abc import ABC, abstractmethod
 from pyspark.sql import DataFrame, SparkSession

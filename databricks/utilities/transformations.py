@@ -1,11 +1,9 @@
-# Databricks notebook source
-# MAGIC %md
-# MAGIC # Transformations Utility — Strategy Pattern
-# MAGIC Each transformation is a strategy: same interface, different behaviour.
-# MAGIC Notebooks compose a pipeline of transforms and apply them in sequence.
-# MAGIC Adding a new transform = new class, zero notebook changes.
-
-# COMMAND ----------
+"""
+Transformations Utility — Strategy Pattern
+Each transformation is a strategy: same interface, different behaviour.
+Notebooks compose a pipeline of transforms and apply them in sequence.
+Adding a new transform = new class, zero notebook changes.
+"""
 
 from abc import ABC, abstractmethod
 from pyspark.sql import DataFrame, SparkSession, Window

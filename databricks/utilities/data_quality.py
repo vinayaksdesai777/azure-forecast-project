@@ -1,10 +1,8 @@
-# Databricks notebook source
-# MAGIC %md
-# MAGIC # Data Quality Utility
-# MAGIC Provides data quality validation functions.
-# MAGIC Validates null checks, data types, duplicates, and empty strings.
-
-# COMMAND ----------
+"""
+Data Quality Utility
+Provides data quality validation functions.
+Validates null checks, data types, duplicates, and empty strings.
+"""
 
 from pyspark.sql import SparkSession, DataFrame, Row
 from pyspark.sql import functions as F
