@@ -10,8 +10,9 @@ import sys
 import uuid
 from datetime import datetime
 
-# Add utilities to path — works whether notebooks run from Repos or ADF job
-sys.path.insert(0, "/Workspace/hpe-forecast/utilities")
+# Add the repo root to path so `from utilities.x import y` resolves.
+# Must be the parent of utilities/, not utilities/ itself.
+sys.path.insert(0, "/Workspace/hpe-forecast")
 
 # COMMAND ----------
 

@@ -11,7 +11,11 @@
 
 # COMMAND ----------
 
+import sys
+sys.path.insert(0, "/Workspace/hpe-forecast")
+
 from pyspark.sql import functions as F
+from utilities.audit_helper import write_audit_entry, mark_audit_failed
 
 # COMMAND ----------
 
@@ -24,8 +28,6 @@ upstream_batch_id = dbutils.widgets.get("batch_id")
 run_id            = dbutils.widgets.get("run_id")
 
 # COMMAND ----------
-
-from utilities.audit_helper import write_audit_entry, mark_audit_failed
 
 metadata       = get_pipeline_metadata(data_subject)
 source_system  = metadata["source_system"]
