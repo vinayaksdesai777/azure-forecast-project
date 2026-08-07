@@ -23,7 +23,8 @@
                 },
                 "parameters": {
                     "data_subject": "o9_forecast_daily",
-                    "storage_account": "your_adls_storage_account"
+                    "landing_path": "o9/daily/",
+                    "storage_account": "hpeforecastadls"
                 }
             }
         ],

@@ -14,7 +14,7 @@
                     "retryIntervalInSeconds": 30
                 },
                 "typeProperties": {
-                    "notebookPath": "/Repos/hpe-forecast/databricks/notebooks/00_get_metadata",
+                    "notebookPath": "/Workspace/Users/vinayakdesai604_gmail.com#ext#@vinayakdesai604gmail.onmicrosoft.com/azure-forecast-project/databricks/notebooks/00_get_metadata",
                     "baseParameters": {
                         "data_subject": ""
                     }
@@ -65,7 +65,7 @@
                                                     "retryIntervalInSeconds": 60
                                                 },
                                                 "typeProperties": {
-                                                    "notebookPath": "/Repos/hpe-forecast/databricks/notebooks/01_ingest_hana_to_landing",
+                                                    "notebookPath": "/Workspace/Users/vinayakdesai604_gmail.com#ext#@vinayakdesai604gmail.onmicrosoft.com/azure-forecast-project/databricks/notebooks/01_ingest_hana_to_landing",
                                                     "baseParameters": {
                                                         "data_subject":  "@item().data_subject",
                                                         "run_id":        "@pipeline().RunId",
@@ -202,7 +202,7 @@
                                 }
                             ],
                             "typeProperties": {
-                                "notebookPath": "/Repos/hpe-forecast/databricks/notebooks/00_update_watermark",
+                                "notebookPath": "/Workspace/Users/vinayakdesai604_gmail.com#ext#@vinayakdesai604gmail.onmicrosoft.com/azure-forecast-project/databricks/notebooks/00_update_watermark",
                                 "baseParameters": {
                                     "data_subject":  "@item().data_subject",
                                     "new_watermark": "@utcNow('yyyy-MM-dd HH:mm:ss')",
