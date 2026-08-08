@@ -30,7 +30,9 @@ run_id            = dbutils.widgets.get("run_id")
 
 metadata       = get_pipeline_metadata(data_subject)
 source_system  = metadata["source_system"]
-gold_table     = metadata["gold_table"]
+# category/region now live in the dimensions, so aggregate over the star view
+# rather than the fact, which carries surrogate keys instead of attributes.
+gold_table     = f"{GOLD_SCHEMA}.v_forecast_star"
 agg_audit_table = f"{GOLD_SCHEMA}.{data_subject.replace('o9_', '')}_agg_audit"
 
 batch_id    = get_batch_id(f"agg_{data_subject}")

@@ -221,3 +221,107 @@ def apply_scd2_merge(
     inserted = incoming_df.count() - updated
     print(f"  [SCD2] inserted={inserted} | expired={updated}")
     return inserted, updated
+
+
+def build_surrogate_key(df: DataFrame, natural_key: str, effective_from_col: str = "effective_from"):
+    """
+    Deterministic surrogate key: sha2(natural_key || effective_from).
+
+    Chosen over GENERATED ALWAYS AS IDENTITY because it is reproducible across
+    full reloads and table recreation — the same business row always resolves to
+    the same key, so the fact table stays valid if a dimension is rebuilt.
+    Including effective_from means each SCD2 version gets its own key, which is
+    what lets a fact row point at the version that was current when it loaded.
+    """
+    return df.withColumn(
+        natural_key.replace("_id", "") + "_sk",
+        F.sha2(F.concat_ws("||", F.col(natural_key).cast("string"),
+                                 F.col(effective_from_col).cast("string")), 256)
+    )
+
+
+def apply_dim_scd2_merge(
+    spark: SparkSession,
+    incoming_df: DataFrame,
+    target_table: str,
+    natural_key: str,
+    tracked_cols: list,
+    storage_path: str = None,
+) -> tuple:
+    """
+    Two-pass SCD Type 2 merge for a dimension table.
+
+    Step 1 expires active rows whose tracked attributes changed.
+    Step 2 inserts new versions plus net-new members.
+
+    The two passes are required: a single MERGE with whenMatchedUpdate +
+    whenNotMatchedInsertAll expires the old row but never inserts the new
+    version, because a changed member *matches* and so never reaches the
+    not-matched branch. That silently removes the member from active rows.
+    Step 2 negates the change condition so expired rows no longer match and
+    the new version is inserted.
+
+    Returns:
+        inserted : int  (new versions + net-new members)
+        expired  : int  (rows closed off this run)
+    """
+    if not spark.catalog.tableExists(target_table):
+        writer = incoming_df.write.format("delta").mode("overwrite").option("overwriteSchema", "true")
+        if storage_path:
+            writer = writer.option("path", storage_path)
+        writer.saveAsTable(target_table)
+        inserted = incoming_df.count()
+        print(f"  [DIM SCD2] {target_table} first load — inserted: {inserted}")
+        return inserted, 0
+
+    target_dt   = DeltaTable.forName(spark, target_table)
+    change_cond = " OR ".join([
+        f"existing.{c} <> incoming.{c}"
+        for c in tracked_cols if c in incoming_df.columns
+    ])
+
+    # Step 1 — expire changed active rows
+    target_dt.alias("existing").merge(
+        incoming_df.alias("incoming"),
+        f"existing.{natural_key} = incoming.{natural_key} "
+        f"AND existing.is_active = true AND ({change_cond})"
+    ).whenMatchedUpdate(set={
+        "effective_to": F.current_date(),
+        "is_active":    F.lit(False),
+    }).execute()
+
+    expired = spark.table(target_table).filter(
+        (F.col("is_active") == False) & (F.col("effective_to") == F.current_date())
+    ).count()
+
+    # Step 2 — insert new versions and net-new members.
+    # Condition negated so rows expired above no longer match and do insert.
+    target_dt.alias("existing").merge(
+        incoming_df.alias("incoming"),
+        f"existing.{natural_key} = incoming.{natural_key} "
+        f"AND existing.is_active = true AND NOT ({change_cond})"
+    ).whenNotMatchedInsertAll().execute()
+
+    total = spark.table(target_table).count()
+    print(f"  [DIM SCD2] {target_table} — expired: {expired} | total rows: {total}")
+    return total, expired
+
+
+def resolve_dim_sk(fact_df: DataFrame, dim_df: DataFrame, natural_key: str, sk_col: str) -> DataFrame:
+    """
+    Attach a dimension surrogate key to fact rows via the active dim version.
+
+    Filtering to is_active = true is what makes SCD2 dimensions safe to join:
+    without it a member with an expired and an active version matches twice and
+    silently doubles every measure. Left join so fact rows survive a missing
+    dimension member; unmatched rows get a sentinel key rather than NULL.
+    """
+    active_dim = (
+        dim_df.filter(F.col("is_active") == True)
+              .select(F.col(natural_key).alias("_dim_nk"), F.col(sk_col))
+    )
+    return (
+        fact_df.join(active_dim, fact_df[natural_key] == active_dim["_dim_nk"], "left")
+               .drop("_dim_nk")
+               .withColumn(sk_col, F.coalesce(F.col(sk_col), F.lit("UNKNOWN")))
+    )
