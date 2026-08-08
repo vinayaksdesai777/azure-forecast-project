@@ -29,9 +29,10 @@ dbutils.widgets.text("data_subject", "", "Data Subject")
 dbutils.widgets.text("batch_id",     "", "Batch ID from Silver")
 dbutils.widgets.text("run_id",       "", "ADF Pipeline Run ID")
 
-data_subject      = dbutils.widgets.get("data_subject")
-upstream_batch_id = dbutils.widgets.get("batch_id")
-run_id            = dbutils.widgets.get("run_id")
+# .strip() — widget values keep whatever was pasted, including trailing spaces.
+data_subject      = dbutils.widgets.get("data_subject").strip()
+upstream_batch_id = dbutils.widgets.get("batch_id").strip()
+run_id            = dbutils.widgets.get("run_id").strip()
 
 # COMMAND ----------
 

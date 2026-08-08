@@ -68,21 +68,21 @@ VALUES
     -- SAP HANA Cloud: daily granular SKU-level (full load first, then incremental by CHANGED_ON)
     ('o9_forecast_daily', 'SAP_HANA', 'SapHana', 'O9_SOURCE', 'FORECAST_VIEW',
      'daily', 'o9/daily/',
-     'hpe_catalog.bronze.o9_forecast_raw', 'hpe_catalog.silver.o9_forecast_ref', 'hpe_catalog.gold.o9_forecast_dmnsn',
+     'hpe_catalog.bronze.o9_forecast_raw', 'hpe_catalog.silver.o9_forecast_ref', 'hpe_catalog.gold.fact_forecast',
      'full', 'CHANGED_ON', NULL,
      'product_id,location_id,forecast_date,channel,customer_id', 'forecast_date', TRUE, 8, TRUE),
 
     -- SAP HANA Cloud: quarterly long-range (75k rows, 3 quarters: Q3-2025, Q4-2025, Q1-2026)
     ('o9_forecast_quarterly', 'SAP_HANA', 'SapHana', 'O9_SOURCE', 'FORECAST_QUARTERLY',
      'quarterly', 'o9/quarterly/',
-     'hpe_catalog.bronze.o9_forecast_raw', 'hpe_catalog.silver.o9_forecast_ref', 'hpe_catalog.gold.o9_forecast_dmnsn',
+     'hpe_catalog.bronze.o9_forecast_raw', 'hpe_catalog.silver.o9_forecast_ref', 'hpe_catalog.gold.fact_forecast',
      'full', 'CHANGED_ON', NULL,
      'product_id,location_id,forecast_date,channel,customer_id', 'forecast_date', TRUE, 4, TRUE),
 
     -- SQL Server on-prem: weekly aggregated (full load first, then incremental by modified_dt)
     ('o9_forecast_weekly', 'SQL_SERVER', 'SqlServer', 'dbo', 'Forecast',
      'weekly', 'o9/weekly/',
-     'hpe_catalog.bronze.o9_forecast_raw', 'hpe_catalog.silver.o9_forecast_ref', 'hpe_catalog.gold.o9_forecast_dmnsn',
+     'hpe_catalog.bronze.o9_forecast_raw', 'hpe_catalog.silver.o9_forecast_ref', 'hpe_catalog.gold.fact_forecast',
      'full', 'modified_dt', NULL,
      'product_id,location_id,forecast_date,channel,customer_id', 'forecast_date', TRUE, 8, TRUE),
 
@@ -94,7 +94,7 @@ VALUES
     -- Quarterly data is in SAP HANA Cloud (FORECAST_QUARTERLY) — see o9_forecast_quarterly row above
     ('o9_forecast_monthly', 'SALESFORCE', 'Salesforce', NULL, 'HPE_Forecast_Monthly__dll',
      'monthly', 'o9/monthly/',
-     'hpe_catalog.bronze.o9_forecast_raw', 'hpe_catalog.silver.o9_forecast_ref', 'hpe_catalog.gold.o9_forecast_dmnsn',
+     'hpe_catalog.bronze.o9_forecast_raw', 'hpe_catalog.silver.o9_forecast_ref', 'hpe_catalog.gold.fact_forecast',
      'full', 'LastModifiedDate', NULL,
      'product_id,location_id,forecast_date,channel,customer_id', 'forecast_date', TRUE, 4, TRUE);
 

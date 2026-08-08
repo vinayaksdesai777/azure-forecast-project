@@ -22,9 +22,11 @@ dbutils.widgets.text("data_subject", "", "Data Subject")
 dbutils.widgets.text("batch_id",     "", "Batch ID from Gold load")
 dbutils.widgets.text("run_id",       "", "ADF Pipeline Run ID")
 
-data_subject      = dbutils.widgets.get("data_subject")
-upstream_batch_id = dbutils.widgets.get("batch_id")
-run_id            = dbutils.widgets.get("run_id")
+# .strip() because widget values keep whatever was pasted, and a trailing space
+# makes the batch_id comparison below fail against data that is actually there.
+data_subject      = dbutils.widgets.get("data_subject").strip()
+upstream_batch_id = dbutils.widgets.get("batch_id").strip()
+run_id            = dbutils.widgets.get("run_id").strip()
 
 # COMMAND ----------
 
@@ -66,7 +68,27 @@ src_count = today_df.count()
 print(f"Gold records for this batch: {src_count}")
 
 if src_count == 0:
-    print("No data for this batch. Exiting.")
+    # An empty result has two very different causes and they need different
+    # outcomes. A batch_id that matches nothing is a wiring error — treating it
+    # as SUCCESS makes an orchestrated run report green while producing nothing,
+    # which is far worse than failing. A genuinely empty Gold layer is benign.
+    if upstream_batch_id:
+        available = [r["_batch_id"] for r in (
+            gold_df.select("_batch_id").distinct().limit(10).collect()
+        )]
+        msg = (
+            f"batch_id '{upstream_batch_id}' matched 0 rows in {gold_table}. "
+            f"Pass the batch_id returned by 03_silver_to_gold, not Silver's. "
+            f"batch_ids present: {available or 'none — Gold is empty'}"
+        )
+        print(f"ERROR: {msg}")
+        mark_audit_failed(spark, batch_id=batch_id, layer="agg_audit",
+                          object_name=agg_audit_table, error_message=msg,
+                          source_system=source_system, data_subject=data_subject,
+                          run_id=run_id)
+        raise ValueError(msg)
+
+    print("Gold has no rows loaded today. Nothing to aggregate.")
     write_audit_entry(spark, batch_id=batch_id, layer="agg_audit", status="SUCCESS",
                       records_inserted=0, source_system=source_system,
                       data_subject=data_subject, object_name=agg_audit_table, run_id=run_id)

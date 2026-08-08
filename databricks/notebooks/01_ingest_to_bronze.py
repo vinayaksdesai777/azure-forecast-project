@@ -23,9 +23,10 @@ dbutils.widgets.text("data_subject", "", "Data Subject")
 dbutils.widgets.text("source_path",  "", "Source Path Override")
 dbutils.widgets.text("run_id",       "", "ADF Pipeline Run ID")
 
-data_subject    = dbutils.widgets.get("data_subject")
-source_path_ovr = dbutils.widgets.get("source_path")
-run_id          = dbutils.widgets.get("run_id")
+# .strip() — widget values keep whatever was pasted, including trailing spaces.
+data_subject    = dbutils.widgets.get("data_subject").strip()
+source_path_ovr = dbutils.widgets.get("source_path").strip()
+run_id          = dbutils.widgets.get("run_id").strip()
 
 # COMMAND ----------
 
