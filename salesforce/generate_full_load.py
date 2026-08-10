@@ -100,10 +100,19 @@ def generate_rows(month_str: str) -> list[dict]:
     rows   = []
 
     for i in range(1, n + 1):
-        region   = REGIONS[i % 4]
+        # Attributes are keyed to the same expressions that build product_id and
+        # location_id, so a product always carries the same category and a
+        # location always sits in the same region/country. Keying them to i
+        # directly made them properties of the row: i % 500 and i % 7 are
+        # coprime, so every product cycled through all 7 categories and the Gold
+        # dimension churned a new SCD2 version on every load.
+        prod_idx = i % 500
+        loc_idx  = (i * 7) % 200
+
+        region   = REGIONS[loc_idx % 4]
         currency = CURRENCY_MAP[region]
-        country  = COUNTRY_MAP[region][i % len(COUNTRY_MAP[region])]
-        category = VALID_CATEGORIES[i % len(VALID_CATEGORIES)]
+        country  = COUNTRY_MAP[region][loc_idx % len(COUNTRY_MAP[region])]
+        category = VALID_CATEGORIES[prod_idx % len(VALID_CATEGORIES)]
         sub_cat  = SUB_MAP[category]
 
         if i % 100 == 0: category, sub_cat = "HARDWARE", "LEGACY"

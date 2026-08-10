@@ -52,16 +52,23 @@ def generate_delta_rows(month_str: str) -> list[dict]:
     rows = []
 
     for i in range(1, ROWS_PER_MONTH + 1):
-        region   = REGIONS[i % 4]
+        # Keyed to the same expressions that build product_id / location_id
+        # below, so a product keeps its category and a location keeps its
+        # region and country across every load. Keying them to i directly made
+        # them properties of the row, which churned the Gold SCD2 dimensions.
+        prod_idx = i % 500
+        loc_idx  = (i * 7) % 200
+
+        region   = REGIONS[loc_idx % 4]
         currency = CURRENCY_MAP[region]
-        country  = COUNTRY_MAP[region][i % len(COUNTRY_MAP[region])]
+        country  = COUNTRY_MAP[region][loc_idx % len(COUNTRY_MAP[region])]
 
         # ~2% dirty currency
         if i % 67 == 0:
             currency = "XYZ"
 
         # base category
-        cat_idx  = i % len(VALID_CATEGORIES)
+        cat_idx  = prod_idx % len(VALID_CATEGORIES)
         category = VALID_CATEGORIES[cat_idx]
         sub_map  = {
             "SERVER":"PROLIANT","STORAGE":"PRIMERA","COMPUTE":"SYNERGY",

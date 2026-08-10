@@ -97,12 +97,18 @@ enriched AS (
         END                                                          AS channel,
 
         -- base category (7 valid HPE categories)
+        -- Derived from (rn % 500) — the same expression that produces
+        -- product_id — so a given product always carries the same category.
+        -- Using rn % 7 directly made category a property of the row rather than
+        -- the product: 500 and 7 are coprime, so every product cycled through
+        -- all 7 categories and the Gold dimension churned a new SCD2 version on
+        -- every load.
         CASE
             WHEN rn % 100 = 0 THEN N'HARDWARE'       -- dirty
             WHEN rn % 100 = 1 THEN N'UNKNOWN'         -- dirty
             WHEN rn % 100 = 2 THEN N'MISC'            -- dirty
             ELSE
-                CASE rn % 7
+                CASE (rn % 500) % 7
                     WHEN 0 THEN N'SERVER'
                     WHEN 1 THEN N'STORAGE'
                     WHEN 2 THEN N'COMPUTE'
@@ -113,12 +119,14 @@ enriched AS (
                 END
         END                                                          AS category,
 
+        -- sub_category likewise keyed to the product, and consistent with the
+        -- category above (index 0 -> SERVER/PROLIANT, 1 -> STORAGE/PRIMERA, ...)
         CASE
             WHEN rn % 100 = 0 THEN N'LEGACY'
             WHEN rn % 100 = 1 THEN N'NA'
             WHEN rn % 100 = 2 THEN N'OTHER'
             ELSE
-                CASE rn % 7
+                CASE (rn % 500) % 7
                     WHEN 0 THEN N'PROLIANT'
                     WHEN 1 THEN N'PRIMERA'
                     WHEN 2 THEN N'SYNERGY'
@@ -129,8 +137,10 @@ enriched AS (
                 END
         END                                                          AS sub_category,
 
-        -- region
-        CASE rn % 4
+        -- region: keyed to the location index like country below. rn % 4
+        -- happened to agree (200 is divisible by 4) but only by coincidence -
+        -- making it explicit keeps region and country derived from one source.
+        CASE ((rn * 7) % 200) % 4
             WHEN 0 THEN N'NORTH_AMERICA'
             WHEN 1 THEN N'EMEA'
             WHEN 2 THEN N'APJ'
@@ -138,11 +148,16 @@ enriched AS (
         END                                                          AS region,
 
         -- country
-        CASE rn % 4
-            WHEN 0 THEN CASE rn % 2 WHEN 0 THEN N'US' ELSE N'CA' END
-            WHEN 1 THEN CASE rn % 3 WHEN 0 THEN N'DE' WHEN 1 THEN N'FR' ELSE N'UK' END
-            WHEN 2 THEN CASE rn % 3 WHEN 0 THEN N'JP' WHEN 1 THEN N'IN' ELSE N'SG' END
-            ELSE        CASE rn % 2 WHEN 0 THEN N'BR' ELSE N'MX' END
+        -- Keyed to (rn * 7) % 200 — the same expression as location_id — so a
+        -- location always sits in the same country. region already lined up by
+        -- coincidence (200 is divisible by 4), but the inner rn % 2 / rn % 3
+        -- terms did not, leaving half the locations spanning two countries and
+        -- churning a new dim_location version on every load.
+        CASE ((rn * 7) % 200) % 4
+            WHEN 0 THEN CASE ((rn * 7) % 200) % 2 WHEN 0 THEN N'US' ELSE N'CA' END
+            WHEN 1 THEN CASE ((rn * 7) % 200) % 3 WHEN 0 THEN N'DE' WHEN 1 THEN N'FR' ELSE N'UK' END
+            WHEN 2 THEN CASE ((rn * 7) % 200) % 3 WHEN 0 THEN N'JP' WHEN 1 THEN N'IN' ELSE N'SG' END
+            ELSE        CASE ((rn * 7) % 200) % 2 WHEN 0 THEN N'BR' ELSE N'MX' END
         END                                                          AS country,
 
         -- currency (~1.5% bad = XYZ every 67th row)

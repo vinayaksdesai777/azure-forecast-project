@@ -62,10 +62,14 @@ enriched AS (
             WHEN 3 THEN N'DISTRIBUTOR' ELSE N'VAR'
         END                                                                      AS channel,
 
+        -- Attributes keyed to the same expressions that build product_id and
+        -- location_id, matching the full-load script, so a product keeps its
+        -- category and a location keeps its region/country across full and
+        -- delta runs. Keying to rn alone made them properties of the row.
         CASE
             WHEN rn % 100 = 0 THEN N'HARDWARE'
             WHEN rn % 100 = 1 THEN N'UNKNOWN'
-            ELSE CASE rn % 7
+            ELSE CASE (rn % 500) % 7
                 WHEN 0 THEN N'SERVER'      WHEN 1 THEN N'STORAGE'
                 WHEN 2 THEN N'COMPUTE'     WHEN 3 THEN N'NETWORKING'
                 WHEN 4 THEN N'PRIVATE_CLOUD' WHEN 5 THEN N'SUPERCOMPUTING'
@@ -76,7 +80,7 @@ enriched AS (
         CASE
             WHEN rn % 100 = 0 THEN N'LEGACY'
             WHEN rn % 100 = 1 THEN N'NA'
-            ELSE CASE rn % 7
+            ELSE CASE (rn % 500) % 7
                 WHEN 0 THEN N'PROLIANT'    WHEN 1 THEN N'PRIMERA'
                 WHEN 2 THEN N'SYNERGY'     WHEN 3 THEN N'ARUBA'
                 WHEN 4 THEN N'GREENLAKE'   WHEN 5 THEN N'CRAY_EX'
@@ -84,20 +88,22 @@ enriched AS (
             END
         END                                                                      AS sub_category,
 
-        CASE rn % 4
+        CASE ((rn * 7) % 200) % 4
             WHEN 0 THEN N'NORTH_AMERICA' WHEN 1 THEN N'EMEA'
             WHEN 2 THEN N'APJ'           ELSE N'LATAM'
         END                                                                      AS region,
 
-        CASE rn % 4
-            WHEN 0 THEN CASE rn % 2 WHEN 0 THEN N'US' ELSE N'CA' END
-            WHEN 1 THEN CASE rn % 3 WHEN 0 THEN N'DE' WHEN 1 THEN N'FR' ELSE N'UK' END
-            WHEN 2 THEN CASE rn % 3 WHEN 0 THEN N'JP' WHEN 1 THEN N'IN' ELSE N'SG' END
-            ELSE        CASE rn % 2 WHEN 0 THEN N'BR' ELSE N'MX' END
+        CASE ((rn * 7) % 200) % 4
+            WHEN 0 THEN CASE ((rn * 7) % 200) % 2 WHEN 0 THEN N'US' ELSE N'CA' END
+            WHEN 1 THEN CASE ((rn * 7) % 200) % 3 WHEN 0 THEN N'DE' WHEN 1 THEN N'FR' ELSE N'UK' END
+            WHEN 2 THEN CASE ((rn * 7) % 200) % 3 WHEN 0 THEN N'JP' WHEN 1 THEN N'IN' ELSE N'SG' END
+            ELSE        CASE ((rn * 7) % 200) % 2 WHEN 0 THEN N'BR' ELSE N'MX' END
         END                                                                      AS country,
 
+        -- Currency follows the region, so it stays consistent with the
+        -- location-keyed region above.
         CASE WHEN rn % 67 = 0 THEN N'XYZ'
-             ELSE CASE rn % 4
+             ELSE CASE ((rn * 7) % 200) % 4
                 WHEN 0 THEN N'USD' WHEN 1 THEN N'EUR'
                 WHEN 2 THEN N'SGD' ELSE N'BRL'
              END

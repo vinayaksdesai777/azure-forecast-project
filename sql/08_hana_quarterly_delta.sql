@@ -41,7 +41,9 @@ BEGIN
             ELSE        v_channel := 'VAR';
         END CASE;
 
-        CASE MOD(v_i, 7)
+        -- Keyed to MOD(v_i, 500), matching v_product_id and the full-load
+        -- script, so a product keeps its category across full and delta runs.
+        CASE MOD(MOD(v_i, 500), 7)
             WHEN 0 THEN v_category := 'SERVER';         v_sub_category := 'PROLIANT';
             WHEN 1 THEN v_category := 'STORAGE';        v_sub_category := 'PRIMERA';
             WHEN 2 THEN v_category := 'COMPUTE';        v_sub_category := 'SYNERGY';
@@ -57,7 +59,9 @@ BEGIN
             ELSE        v_category := v_category; v_sub_category := v_sub_category;
         END CASE;
 
-        CASE MOD(v_i, 4)
+        -- Keyed to MOD(v_i * 7, 200), matching v_location_id, so a location
+        -- keeps its region and country across full and delta runs.
+        CASE MOD(MOD(v_i * 7, 200), 4)
             WHEN 0 THEN v_region := 'NORTH_AMERICA'; v_currency := 'USD';
             WHEN 1 THEN v_region := 'EMEA';          v_currency := 'EUR';
             WHEN 2 THEN v_region := 'APJ';           v_currency := 'SGD';
@@ -66,13 +70,13 @@ BEGIN
 
         CASE v_region
             WHEN 'NORTH_AMERICA' THEN
-                CASE MOD(v_i, 2) WHEN 0 THEN v_country := 'US'; ELSE v_country := 'CA'; END CASE;
+                CASE MOD(MOD(v_i * 7, 200), 2) WHEN 0 THEN v_country := 'US'; ELSE v_country := 'CA'; END CASE;
             WHEN 'EMEA' THEN
-                CASE MOD(v_i, 3) WHEN 0 THEN v_country := 'DE'; WHEN 1 THEN v_country := 'FR'; ELSE v_country := 'UK'; END CASE;
+                CASE MOD(MOD(v_i * 7, 200), 3) WHEN 0 THEN v_country := 'DE'; WHEN 1 THEN v_country := 'FR'; ELSE v_country := 'UK'; END CASE;
             WHEN 'APJ' THEN
-                CASE MOD(v_i, 3) WHEN 0 THEN v_country := 'JP'; WHEN 1 THEN v_country := 'IN'; ELSE v_country := 'SG'; END CASE;
+                CASE MOD(MOD(v_i * 7, 200), 3) WHEN 0 THEN v_country := 'JP'; WHEN 1 THEN v_country := 'IN'; ELSE v_country := 'SG'; END CASE;
             ELSE
-                CASE MOD(v_i, 2) WHEN 0 THEN v_country := 'BR'; ELSE v_country := 'MX'; END CASE;
+                CASE MOD(MOD(v_i * 7, 200), 2) WHEN 0 THEN v_country := 'BR'; ELSE v_country := 'MX'; END CASE;
         END CASE;
 
         v_currency   := CASE WHEN MOD(v_i, 67) = 0 THEN 'XYZ' ELSE v_currency END;

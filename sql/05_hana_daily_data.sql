@@ -109,7 +109,13 @@ BEGIN
                 ELSE        'VAR'
             END;
 
-            v_category := CASE MOD(v_row, 7)
+            -- Category is keyed to MOD(v_row, 500) — the same expression that
+            -- builds v_product_id — so a product always carries the same
+            -- category. MOD(v_row, 7) made category a property of the row: 500
+            -- and 7 are coprime, so every product cycled through all 7
+            -- categories and the Gold dimension churned a new SCD2 version on
+            -- every load.
+            v_category := CASE MOD(MOD(v_row, 500), 7)
                 WHEN 0 THEN 'SERVER'
                 WHEN 1 THEN 'STORAGE'
                 WHEN 2 THEN 'COMPUTE'
@@ -119,7 +125,7 @@ BEGIN
                 ELSE        'AI'
             END;
 
-            v_sub_category := CASE MOD(v_row, 7)
+            v_sub_category := CASE MOD(MOD(v_row, 500), 7)
                 WHEN 0 THEN 'PROLIANT'
                 WHEN 1 THEN 'PRIMERA'
                 WHEN 2 THEN 'SYNERGY'
@@ -144,7 +150,10 @@ BEGIN
                 ELSE        v_sub_category
             END;
 
-            v_region := CASE MOD(v_row, 4)
+            -- Region and country are keyed to MOD(v_row * 7, 200) — the same
+            -- expression as v_location_id — so a location never moves between
+            -- regions or countries across loads.
+            v_region := CASE MOD(MOD(v_row * 7, 200), 4)
                 WHEN 0 THEN 'NORTH_AMERICA'
                 WHEN 1 THEN 'EMEA'
                 WHEN 2 THEN 'APJ'
@@ -159,16 +168,16 @@ BEGIN
             END;
 
             v_country := CASE
-                WHEN v_region = 'NORTH_AMERICA' AND MOD(v_row, 2) = 0 THEN 'US'
-                WHEN v_region = 'NORTH_AMERICA'                      THEN 'CA'
-                WHEN v_region = 'EMEA' AND MOD(v_row, 3) = 0         THEN 'DE'
-                WHEN v_region = 'EMEA' AND MOD(v_row, 3) = 1         THEN 'FR'
-                WHEN v_region = 'EMEA'                               THEN 'UK'
-                WHEN v_region = 'APJ' AND MOD(v_row, 3) = 0          THEN 'JP'
-                WHEN v_region = 'APJ' AND MOD(v_row, 3) = 1          THEN 'IN'
-                WHEN v_region = 'APJ'                                THEN 'SG'
-                WHEN MOD(v_row, 2) = 0                                THEN 'BR'
-                ELSE                                                      'MX'
+                WHEN v_region = 'NORTH_AMERICA' AND MOD(MOD(v_row * 7, 200), 2) = 0 THEN 'US'
+                WHEN v_region = 'NORTH_AMERICA'                                     THEN 'CA'
+                WHEN v_region = 'EMEA' AND MOD(MOD(v_row * 7, 200), 3) = 0          THEN 'DE'
+                WHEN v_region = 'EMEA' AND MOD(MOD(v_row * 7, 200), 3) = 1          THEN 'FR'
+                WHEN v_region = 'EMEA'                                              THEN 'UK'
+                WHEN v_region = 'APJ' AND MOD(MOD(v_row * 7, 200), 3) = 0           THEN 'JP'
+                WHEN v_region = 'APJ' AND MOD(MOD(v_row * 7, 200), 3) = 1           THEN 'IN'
+                WHEN v_region = 'APJ'                                               THEN 'SG'
+                WHEN MOD(MOD(v_row * 7, 200), 2) = 0                                THEN 'BR'
+                ELSE                                                                     'MX'
             END;
 
             v_currency := CASE WHEN MOD(v_row, 67) = 0 THEN 'XYZ' ELSE v_currency END;
