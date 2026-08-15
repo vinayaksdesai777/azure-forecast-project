@@ -1,399 +1,216 @@
 # System Design Document
-## HPE o9 Forecast Data Pipeline
+## o9 Forecast Data Pipeline
 
-**Version:** 1.0  
-**Date:** 2026-06-30  
+**Status:** as-built
+**Companion to:** [01_technical_specification.md](01_technical_specification.md)
 
 ---
 
 ## 1. Component Map
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          EXTERNAL SOURCES                                   │
-│                                                                             │
-│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────────┐  │
-│  │  SAP HANA Cloud  │  │  SQL Server      │  │  Salesforce              │  │
-│  │  O9_SOURCE       │  │  HPE_SOURCE.dbo  │  │  Forecast__c             │  │
-│  │  .FORECAST_VIEW  │  │  .Forecast       │  │                          │  │
-│  │  Port 443 + SSL  │  │  SQLEXPRESS      │  │  login.salesforce.com    │  │
-│  └────────┬─────────┘  └────────┬─────────┘  └────────────┬─────────────┘  │
-└───────────┼─────────────────────┼────────────────────────┼─────────────────┘
-            │  AutoResolve IR     │  shir-onprem           │  AutoResolve IR
-            └─────────────────────┴────────────────────────┘
-                                  │
-                    ┌─────────────▼──────────────┐
-                    │   Azure Data Factory        │
-                    │                             │
-                    │  pl_extract_to_landing      │◄── audit.source_extract_metadata
-                    │  ├── Lookup (metadata)      │    (Azure SQL)
-                    │  ├── ForEach (parallel 4)   │
-                    │  │   └── Switch             │
-                    │  │       ├── SapHana Copy   │
-                    │  │       ├── SqlServer Copy  │
-                    │  │       └── Salesforce Copy │
-                    │  ├── Update Watermark (SP)  │
-                    │  └── Execute pl_master_etl  │
-                    └─────────────┬───────────────┘
-                                  │  pipe-delimited CSV
-                    ┌─────────────▼───────────────┐
-                    │   ADLS Gen2                 │
-                    │   landing/                  │
-                    │   ├── o9/daily/             │
-                    │   ├── o9/weekly/            │
-                    │   ├── o9/monthly/           │
-                    │   └── o9/quarterly/         │
-                    └─────────────┬───────────────┘
-                                  │
-                    ┌─────────────▼───────────────┐
-                    │   Azure Data Factory         │
-                    │                             │
-                    │  pl_master_etl_pipeline     │◄── audit.pipeline_metadata
-                    │  ├── Lookup (metadata)      │    (Azure SQL)
-                    │  ├── GetMetadata (file?)    │
-                    │  └── IfCondition            │
-                    │      ├── TRUE → notebooks   │
-                    │      └── FALSE → NO_DATA log│
-                    └─────────────┬───────────────┘
-                                  │  Databricks jobs (sequential)
-          ┌───────────────────────┼──────────────────────────┐
-          │                       │                          │
-          ▼                       ▼                          ▼
-   01_ingest_to_bronze    02_bronze_to_silver      03_silver_to_gold
-          │                       │                          │
-          ▼                       ▼                          ▼
-   hpe_catalog.bronze     hpe_catalog.silver       hpe_catalog.gold
-   o9_forecast_raw        o9_forecast_ref          o9_forecast_dmnsn
-   (Delta, all STRING)    (Delta, typed+clean)     (Delta, star schema)
-          │                       │                          │
-          ▼                       ▼                          ▼
-   bronze.quarantine      silver.dq_log            gold.o9_forecast_agg_audit
-   (bad PK rows)          (quality failures)       (KPIs for PowerBI/Tableau)
-          │
-          └──────────────────────────────────────────────────┐
-                                                             │
-                                               04_aggregated_audit
-                                                             │
-                                                             ▼
-                                               gold.o9_forecast_agg_audit
-                                               (keyfigure/amount rows)
+| Component | Type | Responsibility |
+|---|---|---|
+| `pl_extract_to_landing` | ADF pipeline | Reads config, fans out over active subjects, extracts each source to landing Parquet, advances the watermark |
+| `pl_master_etl_pipeline` | ADF pipeline | Runs the medallion notebooks in sequence for one subject |
+| `00_config` | Notebook | Catalog names, ADLS paths, secrets, config lookup, DQ domains |
+| `00_get_metadata` | Notebook | Returns active `pipeline_config` rows to ADF as JSON |
+| `00_update_watermark` | Notebook | Advances `last_watermark`, flips `load_type` to `incremental` |
+| `01_ingest_hana_to_landing` | Notebook | SAP HANA → landing Parquet over JDBC |
+| `01_landing_to_silver` | Notebook | Landing Parquet → Silver Delta (harmonize, DQ, cast, SCD2) |
+| `03_silver_to_gold` | Notebook | Dimensions, surrogate keys, fact |
+| `04_aggregated_audit` | Notebook | KPI aggregation and transposition |
+| `utilities/dq_checks.py` | Module | DQ strategies + runner |
+| `utilities/transformations.py` | Module | Transform strategies, SCD2 merges, SK helpers |
+| `utilities/audit_helper.py` | Module | `write_audit_entry`, `mark_audit_failed`, `log_dq_result` |
+| `shir-hpe-forecast` | Integration runtime | On-prem SQL Server connectivity |
 
-          All notebooks write to ──►  hpe_catalog.audit.job_log (Delta, Unity Catalog)
-                                      (batch_id, insert_time, records_inserted,
-                                       records_updated, status, layer)
-                                      hpe_catalog.audit.data_quality_log (Delta)
-
-          ADF pipelines read from ──► Azure SQL: audit.pipeline_metadata
-                                      audit.source_extract_metadata
-                                      (config only — not job tracking)
-```
+There is no Bronze component. `01_ingest_to_bronze` and `02_bronze_to_silver` were merged
+into `01_landing_to_silver` in commit `654f3b3`; see the technical specification §3.1 for
+the rationale.
 
 ---
 
 ## 2. Data Flow Detail
 
-### 2.1 Extraction Flow (pl_extract_to_landing)
+### 2.1 Extraction — `pl_extract_to_landing`
 
-> **Target state** — current code uses CSV sink and has `LIMIT 200` on Salesforce. Both must be fixed.
+1. **Lookup** — calls `00_get_metadata`, which returns every `pipeline_config` row where
+   `is_active = true`.
+2. **ForEach** over the returned subjects.
+3. **Switch** on `connector`:
+   - `SapHana` → Databricks notebook activity running `01_ingest_hana_to_landing` (JDBC).
+   - `SqlServer` → ADF Copy through `shir-hpe-forecast` to landing Parquet.
+   - `Salesforce` → ADF Copy via the Salesforce connector to landing Parquet.
+4. **Watermark** — on success, `00_update_watermark` writes the new high-watermark and
+   sets `load_type = 'incremental'`.
+5. **Chain** — invokes `pl_master_etl_pipeline` for the subject.
 
-```
-ADF reads audit.source_extract_metadata
-         │
-         ├── Row: SAP_HANA / FORECAST_VIEW / incremental / CHANGED_ON
-         │   └── Copy: SELECT * FROM O9_SOURCE.FORECAST_VIEW
-         │             WHERE CHANGED_ON > '<last_watermark>'
-         │             → landing/o9/daily/<timestamp>.parquet   ← Parquet (target)
-         │
-         ├── Row: SQL_SERVER / Forecast / incremental / modified_dt
-         │   └── Copy: SELECT * FROM dbo.Forecast
-         │             WHERE modified_dt > '<last_watermark>'
-         │             → landing/o9/weekly/<timestamp>.parquet
-         │
-         ├── Row: SALESFORCE / Forecast__c / full / (none)
-         │   └── Copy: SELECT FIELDS(ALL) FROM Forecast__c
-         │             (no LIMIT — current LIMIT 200 bug must be removed)
-         │             → landing/o9/monthly/<timestamp>.parquet
-         │
-         └── Row: SALESFORCE / Forecast__c / full / (none)
-             └── Copy: SELECT FIELDS(ALL) FROM Forecast__c
-                       → landing/o9/quarterly/<timestamp>.parquet
-         │
-         ▼
-  Update watermark in audit.source_extract_metadata (incremental only)
-         │
-         ▼
-  Execute pl_master_etl_pipeline (one call per data_subject)
-```
+For `load_type = 'full'` the source query is unbounded. For `incremental`, it is bounded
+below by `last_watermark` on the subject's `watermark_column`.
 
-### 2.2 Bronze Flow (01_ingest_to_bronze) — Target Design
+### 2.2 Landing → Silver — `01_landing_to_silver`
 
-> **Responsibility: read, standardize, PK null check, dedup, quarantine, success/failure status**
-> Current code issues: reads CSV not Parquet, no standardization, no dedup, no quarantine, PK check wrongly sits in Silver, audit writes to Azure SQL.
+Runs as one notebook; the numbered stages below are its internal order.
 
-```
-Read Parquet from landing/o9/<frequency>/
-(spark.read.format("parquet"), all columns as STRING, schema-on-read)
-         │
-         ▼
-Add audit columns:
-  _file_name    = source filename
-  _ingestion_ts = current_timestamp()   ← insert_time per row
-  _frequency    = daily/weekly/monthly/quarterly
-  _batch_id     = UUID from ADF parameter
-         │
-         ▼
-Standardize (Bronze responsibility):
-  TRIM all string columns
-  UPPER(category)
-  Align column names to common schema across HANA / SQL Server / Salesforce
-         │
-         ▼
-PK null check (product_id, location_id, forecast_date):
-  ├── NULL/empty → write to hpe_catalog.bronze.quarantine
-  │                with _dq_fail_reason = 'NULL_PK'
-  └── Valid      → continue
-         │
-         ▼
-Exact dedup on valid rows:
-  ROW_NUMBER() OVER (PARTITION BY product_id, location_id, forecast_date, _frequency
-                     ORDER BY _ingestion_ts DESC)
-  Keep row_num = 1, drop duplicates
-         │
-         ▼
-Write to hpe_catalog.bronze.o9_forecast_raw (Delta)
-  mode = replaceWhere (_frequency = current AND date(_ingestion_ts) = today)
-         │
-         ▼
-Archive Parquet → archive/<frequency>/<timestamp>/
-         │
-         ▼
-Write to hpe_catalog.audit.job_log:
-  layer='bronze', records_inserted=valid_count,
-  records_updated=0, status=SUCCESS/FAILED
-```
+1. **Read** landing Parquet from `abfss://landing@…/<landing_path>`, using a glob so
+   zero-byte ADLS placeholder blobs are skipped. An empty read writes a `SUCCESS` audit
+   row with zero counts and exits — a source with no new rows is not a failure.
+2. **Harmonize** column names across the three sources.
+3. **Enrich** — `AddAuditColumnsTransform` (frequency, load job number, batch id),
+   `StandardizeTransform` (trim, upper-case on `category`).
+4. **Structural DQ on raw strings** — `NullPKCheck` then `DedupCheck`. Failures route to
+   quarantine. Running before the cast means a malformed value is described by the DQ
+   layer rather than dying in a cast.
+5. **Type cast** — `TypeCastTransform` applies the Silver contract
+   (`DECIMAL(18,4)` quantities, `DECIMAL(18,2)` revenue, `DATE` forecast dates), then
+   `AddSilverMetaTransform` stamps the Silver load metadata.
+6. **Domain DQ** — `DomainCheck` on `category` and `currency`. Informational: rows are
+   kept, violations logged.
+7. **SCD2 merge** into `hpe_catalog.silver.o9_forecast_ref` via `apply_scd2_merge`,
+   tracking `forecast_qty`, `revenue_amount`, and the descriptive attributes.
+8. **Period aggregate** — `DerivePeriodTransform` rolls the batch up into
+   `hpe_catalog.silver.o9_forecast_period_agg`.
+9. **Audit** — one `SUCCESS` row with insert/update/error counts.
 
-### 2.3 Silver Flow (02_bronze_to_silver) — Target Design
+### 2.3 Silver → Gold — `03_silver_to_gold`
 
-> **Responsibility: SCD Type 2, business logic validation, aggregations**
-> Current code issues: wrongly does PK check + dedup here (moved to Bronze), no SCD2, no business validation, no aggregations, audit writes to Azure SQL.
+1. Read the current Silver slice for this `_frequency`.
+2. **`dim_product`** — build distinct product attributes, `build_surrogate_key` over
+   `product_id`, then `apply_dim_scd2_merge`.
+3. **`dim_location`** — same over `location_id`.
+4. **`dim_time`** — derive calendar attributes; insert-only `MERGE` on `date_key`,
+   because a calendar date's attributes never change.
+5. **Resolve keys** — `resolve_dim_sk` joins the fact rows to the *current* dimension
+   version to pick up `product_sk` and `location_sk`.
+6. **Write fact** — `replaceWhere _frequency = '<freq>'`, so this subject rebuilds only
+   its own slice of the shared table.
+7. **Audit** — one `SUCCESS` row; the returned `batch_id` is what `04_aggregated_audit`
+   must receive.
 
-```
-Read hpe_catalog.bronze.o9_forecast_raw
-WHERE _batch_id = current_batch_id
-(Bronze already guarantees: no NULL PKs, no exact duplicates)
-         │
-         ▼
-Type casting:
-  forecast_date  → DATE
-  forecast_qty   → DECIMAL(12,2)
-  revenue_amount → DECIMAL(16,2)
-         │
-         ▼
-Business logic validation (flag violations, do NOT drop rows):
-  category NOT IN VALID_CATEGORIES → log to audit.data_quality_log
-  currency NOT IN VALID_CURRENCIES → log to audit.data_quality_log
-         │
-         ▼
-SCD Type 2 MERGE into hpe_catalog.silver.o9_forecast_ref:
-  MATCH on (product_id, location_id, forecast_date, _frequency)
+### 2.4 KPI aggregation — `04_aggregated_audit`
 
-  WHEN MATCHED AND business values changed:
-    UPDATE old row: effective_to = today, is_active = false
-    INSERT new row: effective_from = today, effective_to = NULL, is_active = true
+Reads `v_forecast_star` filtered to the upstream `batch_id`, aggregates by period /
+frequency / category / region, then transposes the measures into `(keyfigure, kpi_value)`
+rows using `stack()` built dynamically from the metric list. Writes
+`hpe_catalog.gold.<subject>_agg_audit`.
 
-  WHEN MATCHED AND no change:
-    skip (idempotent — no duplicate insert)
-
-  WHEN NOT MATCHED:
-    INSERT: effective_from = today, effective_to = NULL, is_active = true
-         │
-         ▼
-Aggregations:
-  GROUP BY (category, region, period, _frequency)
-  SUM(forecast_qty), SUM(revenue_amount)
-  → append to hpe_catalog.silver.o9_forecast_period_agg
-         │
-         ▼
-Write to hpe_catalog.audit.job_log:
-  layer='silver', records_inserted=new rows,
-  records_updated=SCD2 updates, status=SUCCESS/FAILED
-```
-
-### 2.4 Gold Flow (03_silver_to_gold) — Target Design
-
-> **Current code issues:** `mode("overwrite")` destroys history, dim tables never populated, dead code bug (dangling write at lines 65–76), archive logic missing, KPI filter uses date instead of batch_id.
-
-```
-Read hpe_catalog.silver.o9_forecast_ref
-WHERE is_active = true AND _batch_id = current_batch_id
-         │
-         ▼
-Derive period: YYYY-MM-01 from forecast_date
-         │
-         ▼
-Populate dimension tables (SCD Type 2 MERGE):
-  dim_product:  MERGE on product_id — track category/sub_category changes
-  dim_location: MERGE on location_id — track region/country changes
-  dim_time:     INSERT missing date_keys derived from forecast_date
-         │
-         ▼
-Build fact rows: join silver → surrogate keys from dims
-         │
-         ▼
-MERGE into hpe_catalog.gold.fact_o9_forecast:
-  MATCH on (product_key, location_key, time_key, channel, _frequency)
-  WHEN NOT MATCHED → INSERT   (new period record)
-  WHEN MATCHED     → no update (historical periods are immutable)
-         │
-         ▼
-Archive Silver partition → archive/silver/<period>/
-  (move processed _ingestion_date partition after Gold load)
-         │
-         ▼
-Write to hpe_catalog.audit.job_log:
-  layer='gold', records_inserted=<new fact rows>, records_updated=0
-```
-
-### 2.5 KPI Aggregation (04_aggregated_audit) — Target Design
-
-> **Current code issue:** filters `_gold_load_ts = today` — breaks on reruns. Must filter by `_batch_id` instead.
-
-```
-Read hpe_catalog.gold.fact_o9_forecast
-WHERE _batch_id = current_batch_id   ← use batch_id not date
-         │
-         ▼
-GROUP BY period, category, region, _frequency
-SUM(forecast_qty), SUM(revenue_amount)
-         │
-         ▼
-Transpose (stack):
-  (period, category, region, keyfigure='forecast_qty',   total=SUM(forecast_qty))
-  (period, category, region, keyfigure='revenue_amount', total=SUM(revenue_amount))
-         │
-         ▼
-Append to hpe_catalog.gold.o9_forecast_agg_audit
-(source for PowerBI / Tableau dashboards)
-```
+If the passed `batch_id` matches zero rows it raises, listing the batch ids actually
+present, rather than writing an empty success.
 
 ---
 
-## 3. Database Schemas
+## 3. Schemas
 
-### 3.1 Azure SQL — audit-db (pipeline configuration only)
+### 3.1 `hpe_catalog.audit`
 
-```sql
-audit.pipeline_metadata        -- one row per data_subject (runtime config)
-  data_subject, source_system, source_path, bronze_table,
-  silver_table, gold_table, frequency, is_active
+| Table | Purpose |
+|---|---|
+| `pipeline_config` | Per-subject runtime config; replaces the former Azure SQL `pipeline_metadata` |
+| `job_log` | One row per layer per run |
+| `data_quality_log` | One row per check per batch |
 
-audit.source_extract_metadata  -- one row per source object (extraction config + watermark)
-  source_system, connector, source_schema, source_object,
-  landing_path, data_subject, load_type, watermark_column,
-  last_watermark, is_active
-```
+Key `pipeline_config` columns: `data_subject`, `source_system`, `connector`,
+`source_schema`, `source_object`, `frequency`, `landing_path`, `silver_table`,
+`gold_table`, `load_type`, `watermark_column`, `last_watermark`, `null_check_columns`,
+`partition_column`, `num_partitions`, `is_active`.
 
-> Azure SQL holds **configuration only**. Job tracking and DQ logs live in Unity Catalog (see 3.2 below).
+`bronze_table` still exists on this table but is unused and read by nothing. It is kept
+nullable so pre-existing config rows stay loadable.
 
-### 3.2 Unity Catalog — hpe_catalog.audit (job tracking + DQ)
+### 3.2 `hpe_catalog.silver`
 
-```sql
-hpe_catalog.audit.job_log      -- one row per notebook run per layer
-  batch_id        STRING        -- UUID from ADF, links all layers in one run
-  insert_time     TIMESTAMP     -- when the row was written
-  layer           STRING        -- bronze / silver / gold / agg_audit
-  status          STRING        -- SUCCESS / FAILED
-  records_inserted BIGINT       -- new rows written
-  records_updated  BIGINT       -- rows updated (SCD2 merges in Silver/Gold)
-  source_system   STRING
-  data_subject    STRING
-  error_message   STRING        -- NULL on success
+- `o9_forecast_ref` — typed, deduplicated, SCD2. Partitioned by `_ingestion_date`.
+- `o9_forecast_period_agg` — pre-rolled period metrics.
+- `quarantine` — rows rejected by structural DQ, with `_dq_fail_reason`.
 
-hpe_catalog.audit.data_quality_log   -- one row per DQ check per run
-  batch_id, table_name, check_type,
-  records_checked, records_passed, records_failed, check_ts
-```
+### 3.3 `hpe_catalog.gold`
 
-### 3.2 Unity Catalog — hpe_catalog
-
-```
-hpe_catalog
-├── bronze
-│   ├── o9_forecast_raw      (all STRING + audit cols, Delta)
-│   └── quarantine           (failed PK rows, Delta)
-├── silver
-│   └── o9_forecast_ref      (typed cols, NOT NULL PKs, Delta)
-└── gold
-    ├── o9_forecast_dmnsn    (periodic fact, partitioned by period+frequency)
-    ├── o9_forecast_agg_audit (KPI summary, keyfigure rows)
-    ├── dim_product           (SCD Type 2)
-    ├── dim_location          (SCD Type 2)
-    └── dim_time              (derived period attributes)
-```
+`dim_product`, `dim_location`, `dim_time`, `fact_forecast`, `v_forecast_star`, and one
+`<subject>_agg_audit` table per data subject. See technical specification §6.3.
 
 ---
 
 ## 4. ADF Pipeline Interactions
 
 ```
-Trigger (daily/weekly/monthly/quarterly schedule)
-    │
-    ▼
-pl_extract_to_landing
-    │  reads  → audit.source_extract_metadata (Azure SQL)
-    │  writes → landing/o9/<frequency>/ (ADLS CSV)
-    │  calls  → audit.usp_update_extract_watermark (Azure SQL SP)
-    │  calls  → pl_master_etl_pipeline (ADF Execute Pipeline)
-    │
-    ▼
-pl_master_etl_pipeline
-    │  reads  → audit.pipeline_metadata (Azure SQL Lookup)
-    │  checks → landing file existence (GetMetadata)
-    │  runs   → 01_ingest_to_bronze (Databricks notebook)
-    │  runs   → 02_bronze_to_silver (Databricks notebook)
-    │  runs   → 03_silver_to_gold   (Databricks notebook)
-    │  runs   → 04_aggregated_audit (Databricks notebook)
-    │  each notebook writes → audit.pipeline_audit (JDBC)
+tr_<freq>_schedule
+        │
+        ▼
+pl_extract_to_landing ──► 00_get_metadata (config)
+        │                 Switch(connector) ──► HANA JDBC notebook
+        │                                  ──► Copy via SHIR (SQL Server)
+        │                                  ──► Copy via Salesforce connector
+        │                 00_update_watermark
+        ▼
+pl_master_etl_pipeline ──► 01_landing_to_silver
+                       ──► 03_silver_to_gold
+                       ──► 04_aggregated_audit
 ```
+
+Within `pl_master_etl_pipeline` each notebook depends on its predecessor succeeding, so a
+Silver failure prevents Gold from ever running against uncleansed data. The `batch_id`
+returned by `03_silver_to_gold` is passed into `04_aggregated_audit` — passing Silver's
+batch id instead is the classic wiring error, and the notebook fails loudly on it.
+
+### 4.1 Triggers
+
+| Trigger | Subject | Schedule (UTC) |
+|---|---|---|
+| `tr_daily_schedule` | `o9_forecast_daily` | 06:00 daily |
+| `tr_weekly_schedule` | `o9_forecast_weekly` | 07:00 Mondays |
+| `tr_monthly_schedule` | `o9_forecast_monthly` | 08:00 on the 1st |
+| `tr_quarterly_schedule` | `o9_forecast_quarterly` | 09:00 quarterly |
 
 ---
 
 ## 5. Integration Runtime Routing
 
-| Source | IR Type | Reason |
+| Source | Runtime | Reason |
 |---|---|---|
-| SAP HANA Cloud | AutoResolve (Azure IR) | Public internet endpoint (port 443) |
-| SQL Server on-prem | `shir-onprem` (Self-Hosted IR) | Behind corporate network, no public endpoint |
-| Salesforce | AutoResolve (Azure IR) | SaaS, public internet |
-| ADLS Gen2 | AutoResolve (Azure IR) | Native Azure service |
-| Azure SQL | AutoResolve (Azure IR) | Native Azure service |
-| Databricks | AutoResolve (Azure IR) | Native Azure service |
+| SAP HANA Cloud | Databricks cluster (JDBC) | Avoids the ADF connector's ODBC/TLS driver constraint |
+| SQL Server (on-prem) | `shir-hpe-forecast` | Private network reachability |
+| Salesforce | Azure AutoResolveIntegrationRuntime | Public API endpoint |
+| ADLS Gen2 | Azure AutoResolveIntegrationRuntime | Azure-internal |
 
 ---
 
-## 6. Key Vault Secret Routing
+## 6. Secret Routing
 
-```
-Azure Key Vault (kv-hpe-o9-dev)
-    │
-    ├── saphana-password          → ls_sap_hana (ADF linked service)
-    ├── sqlserver-password        → ls_sql_server (ADF linked service)
-    ├── salesforce-password       → ls_salesforce (ADF linked service)
-    ├── salesforce-security-token → ls_salesforce (ADF linked service)
-    ├── adls-access-key           → ls_adls_gen2 + Databricks secret scope
-    ├── sql-user                  → 00_config notebook (JDBC connection)
-    └── sql-password              → 00_config notebook (JDBC connection)
-```
+All secrets resolve from the Databricks secret scope **`hpe-forecast`**:
+
+| Key | Consumer |
+|---|---|
+| `adls-account-name`, `adls-account-key` | `00_config.py`, notebook ADLS access |
+| `hana-host`, `hana-user`, `hana-password` | `01_ingest_hana_to_landing` |
+| `sqlserver-user`, `sqlserver-password` | `ls_sql_server` |
+| `salesforce-user`, `salesforce-password`, `salesforce-token` | `ls_salesforce` |
+| `sp-client-id`, `sp-client-secret`, `sp-tenant-id` | ADLS OAuth service principal |
+
+`ls_keyvault.json` and `ls_azure_sql_audit.json` remain in `adf/` from earlier revisions
+but are referenced by no active pipeline.
 
 ---
 
 ## 7. Error Handling
 
-| Failure Point | Behaviour | Recovery |
-|---|---|---|
-| Source extract fails | ADF activity fails; ForEach continues other sources | Re-run pl_extract_to_landing for failed source |
-| Landing file missing | pl_master_etl_pipeline IfCondition = FALSE → logs NO_DATA | Drop CSV manually or re-run extract |
-| Bronze PK null rows | Routed to `bronze.quarantine`, not dropped | Investigate quarantine table, fix source, reprocess |
-| Silver DQ failures | Logged to `audit.data_quality_log` | Query DQ log, fix source data, re-run Silver |
-| Notebook exception | ADF marks notebook activity FAILED; audit entry written with FAILED status | Check `audit.pipeline_audit` for error_message |
-| Watermark not updated | Next incremental run re-extracts from old watermark (duplicate rows) | Silver dedup logic handles re-ingested duplicates |
+- Every notebook wraps its work so `mark_audit_failed` writes the audit row **before**
+  the exception re-raises. ADF registers the failure; the diagnostic row persists.
+- Batch ids are stage-prefixed (`silver_…`, `gold_…`, `agg_…`), so a failing row names
+  its own layer without a join.
+- An empty source read is a `SUCCESS` with zero counts, not a failure.
+- A `batch_id` matching zero rows in `04_aggregated_audit` is a hard failure.
+- Structural DQ failures do not stop the run; they are quarantined and counted. Domain
+  violations do not stop the run at all.
+
+---
+
+## 8. Reset and Recovery
+
+| Script | Effect |
+|---|---|
+| `sql/10_reset_medallion.sql` | Clears Silver and Gold state for all four subjects |
+| `data_model/03_gold_schema.sql` | Recreates the Gold tables and the star view |
+| `sql/13_drop_bronze_layer.sql` | Drops the legacy Bronze schema; run only after Silver is verified |
+
+Landing and archive are never touched by a reset, so a full replay never needs to re-read
+the source systems.
