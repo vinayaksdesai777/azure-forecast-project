@@ -74,3 +74,37 @@ TBLPROPERTIES (
     'delta.autoOptimize.optimizeWrite' = 'true',
     'quality' = 'silver'
 );
+
+-- ============================================================
+-- Silver quarantine — rows that failed structural DQ (null PK, duplicates).
+-- Written by 01_landing_to_silver BEFORE the type cast, so values are kept in
+-- their original string form for investigation.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS hpe_catalog.silver.quarantine (
+    product_id          STRING,
+    location_id         STRING,
+    forecast_date       STRING,
+    forecast_qty        STRING,
+    revenue_amount      STRING,
+    customer_id         STRING,
+    channel             STRING,
+    category            STRING,
+    sub_category        STRING,
+    region              STRING,
+    country             STRING,
+    currency            STRING,
+    uom                 STRING,
+    _frequency          STRING,
+    _file_name          STRING,
+    _ingestion_ts       TIMESTAMP,
+    _update_ts          TIMESTAMP,
+    _load_job_nr        STRING,
+    _batch_id           STRING,
+    _dq_fail_reason     STRING      COMMENT 'Reason row was quarantined: NULL_PK, DEDUP, etc.'
+)
+USING DELTA
+COMMENT 'Silver quarantine: rows that failed structural DQ and were not merged into Silver'
+TBLPROPERTIES (
+    'delta.autoOptimize.optimizeWrite' = 'true',
+    'quality' = 'silver'
+);

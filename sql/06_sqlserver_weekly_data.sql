@@ -6,7 +6,7 @@
 -- After this: run 09_sqlserver_weekly_delta.sql for Jul 2025-Jun 2026 incremental (~8.5k rows/run)
 -- ============================================================
 
-USE ForecastDB;   -- change to your actual database name
+USE HPE_SOURCE;
 GO
 
 -- Create table

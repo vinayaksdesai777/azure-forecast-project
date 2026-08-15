@@ -30,8 +30,9 @@ if UTILITIES_PARENT not in sys.path:
 # COMMAND ----------
 
 # Unity Catalog
+# No BRONZE_SCHEMA: landing Parquet is the raw archive, so the pipeline goes
+# landing -> silver -> gold.
 CATALOG        = "hpe_catalog"
-BRONZE_SCHEMA  = f"{CATALOG}.bronze"
 SILVER_SCHEMA  = f"{CATALOG}.silver"
 GOLD_SCHEMA    = f"{CATALOG}.gold"
 AUDIT_SCHEMA   = f"{CATALOG}.audit"

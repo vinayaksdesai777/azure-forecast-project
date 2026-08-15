@@ -25,7 +25,10 @@
                             "fileName": "*"
                         }
                     },
-                    "fieldList": ["exists", "childItems"]
+                    "fieldList": [
+                        "exists",
+                        "childItems"
+                    ]
                 }
             },
             {
@@ -34,7 +37,9 @@
                 "dependsOn": [
                     {
                         "activity": "Check Source Files Exist",
-                        "dependencyConditions": ["Succeeded"]
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
                     }
                 ],
                 "typeProperties": {
@@ -44,7 +49,7 @@
                     },
                     "ifTrueActivities": [
                         {
-                            "name": "Run Bronze Notebook",
+                            "name": "Run Silver Notebook",
                             "type": "DatabricksNotebook",
                             "dependsOn": [],
                             "policy": {
@@ -53,7 +58,7 @@
                                 "retryIntervalInSeconds": 60
                             },
                             "typeProperties": {
-                                "notebookPath": "/Workspace/Users/vinayakdesai604_gmail.com#ext#@vinayakdesai604gmail.onmicrosoft.com/azure-forecast-project/databricks/notebooks/01_ingest_to_bronze",
+                                "notebookPath": "/Workspace/Users/vinayakdesai604_gmail.com#ext#@vinayakdesai604gmail.onmicrosoft.com/azure-forecast-project/databricks/notebooks/01_landing_to_silver",
                                 "baseParameters": {
                                     "data_subject": {
                                         "value": "@pipeline().parameters.data_subject",
@@ -72,43 +77,8 @@
                             "linkedServiceName": {
                                 "referenceName": "ls_databricks",
                                 "type": "LinkedServiceReference"
-                            }
-                        },
-                        {
-                            "name": "Run Silver Notebook",
-                            "type": "DatabricksNotebook",
-                            "dependsOn": [
-                                {
-                                    "activity": "Run Bronze Notebook",
-                                    "dependencyConditions": ["Succeeded"]
-                                }
-                            ],
-                            "policy": {
-                                "timeout": "0.01:00:00",
-                                "retry": 1,
-                                "retryIntervalInSeconds": 60
                             },
-                            "typeProperties": {
-                                "notebookPath": "/Workspace/Users/vinayakdesai604_gmail.com#ext#@vinayakdesai604gmail.onmicrosoft.com/azure-forecast-project/databricks/notebooks/02_bronze_to_silver",
-                                "baseParameters": {
-                                    "data_subject": {
-                                        "value": "@pipeline().parameters.data_subject",
-                                        "type": "Expression"
-                                    },
-                                    "batch_id": {
-                                        "value": "@json(activity('Run Bronze Notebook').output.runOutput).batch_id",
-                                        "type": "Expression"
-                                    },
-                                    "run_id": {
-                                        "value": "@pipeline().RunId",
-                                        "type": "Expression"
-                                    }
-                                }
-                            },
-                            "linkedServiceName": {
-                                "referenceName": "ls_databricks",
-                                "type": "LinkedServiceReference"
-                            }
+                            "description": "Landing Parquet to Silver: harmonize, structural DQ, type cast, domain DQ, SCD2 merge."
                         },
                         {
                             "name": "Run Gold Notebook",
@@ -116,7 +86,9 @@
                             "dependsOn": [
                                 {
                                     "activity": "Run Silver Notebook",
-                                    "dependencyConditions": ["Succeeded"]
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
                                 }
                             ],
                             "policy": {
@@ -152,7 +124,9 @@
                             "dependsOn": [
                                 {
                                     "activity": "Run Gold Notebook",
-                                    "dependencyConditions": ["Succeeded"]
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
                                 }
                             ],
                             "policy": {
@@ -225,7 +199,12 @@
                 "defaultValue": "hpeforecastadls"
             }
         },
-        "annotations": ["ETL", "Medallion", "Bronze-Silver-Gold", "No-Azure-SQL"],
+        "annotations": [
+            "ETL",
+            "Medallion",
+            "Bronze-Silver-Gold",
+            "No-Azure-SQL"
+        ],
         "folder": {
             "name": "o9_data_pipeline"
         }

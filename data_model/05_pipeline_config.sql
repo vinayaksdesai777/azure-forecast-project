@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS hpe_catalog.audit.pipeline_config (
     source_object       STRING      NOT NULL  COMMENT 'Table, view, or SOQL object name',
     frequency           STRING      NOT NULL  COMMENT 'daily / weekly / monthly / quarterly',
     landing_path        STRING      NOT NULL  COMMENT 'Folder under landing container (e.g. o9/daily/)',
-    bronze_table        STRING      NOT NULL  COMMENT 'hpe_catalog.bronze.<table>',
+    bronze_table        STRING                COMMENT 'Unused since the Bronze layer was removed; landing is the raw archive. Retained so existing config rows stay loadable.',
     silver_table        STRING      NOT NULL  COMMENT 'hpe_catalog.silver.<table>',
     gold_table          STRING      NOT NULL  COMMENT 'hpe_catalog.gold.<table>',
     load_type           STRING      NOT NULL  COMMENT 'full / incremental',

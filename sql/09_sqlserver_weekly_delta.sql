@@ -7,7 +7,7 @@
 -- ADF watermark column: modified_dt
 -- ============================================================
 
-USE ForecastDB;   -- change to your actual database name
+USE HPE_SOURCE;
 GO
 
 -- ============================================================
