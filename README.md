@@ -1,23 +1,21 @@
-# Azure End-to-End Data Pipeline — HPE o9 Forecast Medallion Architecture
+# Azure End-to-End Data Pipeline — o9 Forecast Medallion Architecture
 
-A production-style data engineering project that ingests HPE o9 supply-chain forecast data from SAP HANA, SQL Server, and Salesforce, processes it through a Bronze → Silver → Gold Medallion architecture on **Azure Databricks**, and serves analytics-ready tables with a full audit trail. Built with Delta Lake, PySpark, Azure Data Factory, Unity Catalog, Azure SQL, and Terraform IaC.
+A production-style data engineering project that extracts supply-chain forecast data from **SAP HANA Cloud**, an **on-premises SQL Server**, and **Salesforce**, then processes it through a Bronze → Silver → Gold medallion architecture on **Azure Databricks**, serving a surrogate-keyed star schema with a full audit trail.
 
-> This is a build-along spec, not a finished repo. Work through the phases in order. Each phase has acceptance criteria — don't move on until you can tick every box and explain *why* you did it that way. The "why" is what you'll be asked about in interviews.
+Built with Delta Lake, PySpark, Azure Data Factory, ADLS Gen2, and Unity Catalog.
 
 ---
 
 ## Why this project exists
 
-Most portfolio pipelines stop at "read a CSV, write a Parquet." This one deliberately forces you through the parts that real data engineers get paid for and that interviewers actually probe:
+Most portfolio pipelines stop at "read a CSV, write a Parquet." This one deliberately covers the parts that real data engineers get paid for:
 
-- Metadata-driven orchestration where adding a new data subject requires zero code changes
-- Multi-frequency ingestion (daily, weekly, monthly, quarterly) from a single parameterised pipeline
-- Data quality enforcement with quarantine, audit logging, and pass-rate tracking
-- Idempotent loads so re-runs never corrupt data
-- A centralised audit trail across every layer, queryable from a single SQL database
-- Dimensional modelling (star schema with SCD Type 2) for the serving layer
-
-If you build this for real, you will be able to defend every design choice in an interview — which is the entire point.
+- **Metadata-driven orchestration** — adding a new data subject is a SQL `INSERT`, not a code change
+- **Multi-source, multi-frequency ingestion** — three heterogeneous source systems on four independent schedules through one pipeline
+- **Data quality with quarantine** — hard-fail and informational checks with separate policies, all logged
+- **A shared-table medallion** — all four subjects share one Bronze table and one fact table, scoped by partition
+- **Dimensional modelling** — a periodic-snapshot fact with SCD Type 2 conformed dimensions
+- **Centralised audit** — every layer of every run writes a queryable row with counts, status, and the ADF run id
 
 ---
 
@@ -25,42 +23,40 @@ If you build this for real, you will be able to defend every design choice in an
 
 ```mermaid
 flowchart LR
-    SRC["Sources\nCSV Files (xyz Export)"]
-    LND["Landing\nADLS Gen2"]
-    BRZ["Bronze\nRaw Delta"]
-    SLV["Silver\nCleansed · DQ · Typed"]
-    GLD["Gold\nStar Schema · Aggregations"]
-    AUD["Audit DB\nAzure SQL"]
-    BI["Serving\nPower BI / SQL Analytics"]
+    HANA["SAP HANA Cloud<br/>daily · quarterly"]
+    MSSQL["SQL Server on-prem<br/>weekly · via SHIR"]
+    SFDC["Salesforce<br/>monthly · API"]
 
-    SRC -->|ADF Copy| LND
+    LND["Landing<br/>ADLS Gen2 · Parquet"]
+    BRZ["Bronze<br/>raw · all STRING"]
+    SLV["Silver<br/>typed · DQ · SCD2"]
+    GLD["Gold<br/>star schema"]
+    AUD["audit schema<br/>job_log · data_quality_log"]
+    BI["Serving<br/>Power BI / SQL"]
+
+    HANA -->|Databricks JDBC| LND
+    MSSQL -->|ADF Copy| LND
+    SFDC -->|ADF Copy| LND
+
     LND -->|01_ingest_to_bronze| BRZ
     BRZ -->|02_bronze_to_silver| SLV
     SLV -->|03_silver_to_gold| GLD
     GLD -->|04_aggregated_audit| GLD
     GLD --> BI
 
-    BRZ -->|audit entry| AUD
-    SLV -->|DQ log + audit entry| AUD
-    GLD -->|audit entry| AUD
+    BRZ -.audit.-> AUD
+    SLV -.audit + DQ.-> AUD
+    GLD -.audit.-> AUD
 
-    subgraph ORCH ["ADF: metadata-driven scheduling, retries, alerts"]
-        LND
+    subgraph UC ["Unity Catalog — hpe_catalog"]
         BRZ
         SLV
         GLD
-    end
-
-    subgraph GOV ["Unity Catalog: governance, lineage, access control"]
-        BRZ
-        SLV
-        GLD
+        AUD
     end
 ```
 
-A standalone image version lives at [`architecture.svg`](./architecture.svg) for use in slides or your portfolio.
-
-**Flow in one line:** ADF checks for files, fetches metadata from SQL, runs four Databricks notebooks in sequence (raw ingest → cleanse → business model → KPI aggregation), and logs every batch to a central audit database — all triggered on four independent schedules, governed by Unity Catalog.
+**Flow in one line:** `pl_extract_to_landing` reads config from Unity Catalog, fans out over the active data subjects, extracts each source to landing Parquet and updates its watermark, then calls `pl_master_etl_pipeline`, which runs four Databricks notebooks in sequence and logs every batch to the audit schema.
 
 ---
 
@@ -68,233 +64,212 @@ A standalone image version lives at [`architecture.svg`](./architecture.svg) for
 
 | Layer | Technology |
 |---|---|
-| Orchestration | Azure Data Factory (ADF) — metadata-driven, parameterised pipeline |
-| Storage | Azure Data Lake Storage Gen2 (ADLS) — landing, bronze, silver, gold, archive containers |
-| Compute & processing | Azure Databricks, Apache Spark / PySpark |
-| Storage format | Delta Lake — ACID transactions, schema enforcement, time travel |
-| Metadata & audit | Azure SQL Database — pipeline audit, data quality log, pipeline metadata |
-| Secrets | Azure Key Vault — connection strings and storage keys |
-| Governance | Unity Catalog — catalogs, schemas, lineage, access grants |
-| Modelling | Dimensional modelling — star schema, SCD Type 2 |
+| Orchestration | Azure Data Factory — two metadata-driven parameterised pipelines |
+| On-prem connectivity | Self-hosted Integration Runtime (`shir-hpe-forecast`) |
+| Storage | ADLS Gen2 — `landing`, `bronze`, `silver`, `gold`, `archive`, `unity-catalog` containers |
+| Compute | Azure Databricks, PySpark |
+| Storage format | Delta Lake — ACID, `MERGE`, `replaceWhere`, schema evolution, time travel |
+| Governance | Unity Catalog — catalog, schemas, external locations, lineage |
+| Metadata & audit | Unity Catalog Delta tables (`hpe_catalog.audit.*`) |
+| Secrets | Databricks secret scope `hpe-forecast` |
+| Modelling | Star schema — periodic snapshot fact, SCD Type 2 dimensions |
 | Language | Python (PySpark), SQL, JSON (ADF definitions) |
-| Testing | pytest — unit tests for data quality and transformation functions |
+| Testing | pytest |
+
+> **Note on earlier revisions.** This project originally used Azure SQL for audit and metadata, Azure Key Vault for secrets, and CSV landing files. All three were removed: audit and config moved into Unity Catalog Delta tables, secrets moved to a Databricks secret scope, and landing moved to Parquet. Terraform IaC was likewise dropped in favour of CLI and REST deployment. The commit history records each of these migrations.
 
 ---
 
-## Dataset
+## Sources and data subjects
 
-**Source:** o9 Solutions supply-chain forecast exports — CSV files with pipe (`|`) delimiter, delivered across four frequencies: daily, weekly, monthly, and quarterly.
+Four data subjects, each a row in `hpe_catalog.audit.pipeline_config`:
 
-**Schema:** `product_id`, `location_id`, `forecast_date`, `forecast_qty`, `revenue_amount`, plus supporting categorical and free-text fields.
+| Data subject | Source system | Extract method | Frequency | Full-load rows |
+|---|---|---|---|---|
+| `o9_forecast_daily` | SAP HANA Cloud | Databricks JDBC notebook | Daily 06:00 UTC | ~547,800 |
+| `o9_forecast_quarterly` | SAP HANA Cloud | Databricks JDBC notebook | Quarterly 09:00 UTC | 600,000 |
+| `o9_forecast_weekly` | SQL Server (on-prem) | ADF Copy via SHIR | Mondays 07:00 UTC | ~390,000 |
+| `o9_forecast_monthly` | Salesforce | ADF Copy (`SalesforceV2Source`) | 1st monthly 08:00 UTC | ~390,000 |
 
-**Why this works:** the multi-frequency nature forces you to build a single parameterised pipeline that handles different schedules, table targets, and partition strategies from a configuration table rather than hard-coded notebooks. That metadata-driven pattern is what separates a pipeline you explain in ten minutes from one you defend for an hour.
+Full load covers Jul 2020 – Jun 2025; incremental deltas run Jul 2025 onward at roughly 8–10k rows per run, driven by a high-watermark column per subject.
+
+**Common schema:** `product_id`, `location_id`, `forecast_date`, `forecast_qty`, `revenue_amount`, plus `customer_id`, `channel`, `category`, `sub_category`, `region`, `country`, `currency`, `uom`.
+
+> SAP HANA is read through a Databricks JDBC notebook rather than an ADF Copy activity. The ADF SAP HANA connector needs an ODBC driver with TLS support, and SAP only distributes `HDB_CLIENT_NO_CRYPTO` for Windows without a paid support contract. The JVM handles TLS natively, so `ngdbc.jar` sidesteps the problem entirely.
 
 ---
 
 ## Repository structure
 
 ```
-azure-data-pipeline/
-├── README.md
-├── conf/
-│   └── pipeline_config.json            # Paths, table names, env params
-├── databricks/
-│   ├── notebooks/
-│   │   ├── 00_config.py                # Centralised config: paths, schemas, helpers
-│   │   ├── 01_ingest_to_bronze.py      # CSV ingestion → raw Delta
-│   │   ├── 02_bronze_to_silver.py      # DQ, cleansing, schema enforcement
-│   │   ├── 03_silver_to_gold.py        # Business transformation, star schema
-│   │   └── 04_aggregated_audit.py      # KPI aggregation and transposed reporting
-│   └── utilities/
-│       ├── audit_helper.py             # Audit logging functions (write/mark-failed)
-│       └── data_quality.py             # Reusable DQ validation functions
+azure-forecast-project/
 ├── adf/
 │   ├── pipeline/
-│   │   └── pl_master_etl_pipeline.json # Master orchestration pipeline
-│   ├── linkedservices/
-│   │   ├── ls_adls_gen2.json
-│   │   ├── ls_azure_databricks.json
-│   │   ├── ls_azure_sql_audit.json
-│   │   └── ls_keyvault.json
-│   ├── datasets/
-│   │   ├── ds_landing_csv.json
-│   │   └── ds_adls_parquet.json
-│   └── triggers/
-│       ├── tr_daily_schedule.json      # 6:00 AM UTC
-│       ├── tr_weekly_schedule.json     # Monday 7:00 AM UTC
-│       ├── tr_monthly_schedule.json    # 1st of month 8:00 AM UTC
-│       └── tr_quarterly_schedule.json  # 1st of quarter 9:00 AM UTC
+│   │   ├── pl_extract_to_landing.json     # Source → landing Parquet, per connector
+│   │   └── pl_master_etl_pipeline.json    # Landing → Bronze → Silver → Gold
+│   ├── linkedService/                     # ADLS, Databricks, HANA, SQL Server, Salesforce
+│   ├── dataset/                           # Landing Parquet, source tables/objects
+│   ├── integrationRuntime/shir_onprem.json
+│   └── trigger/                           # Four independent schedules
+├── databricks/
+│   ├── notebooks/
+│   │   ├── 00_config.py                   # Catalog, paths, secrets, config lookup
+│   │   ├── 00_get_metadata.py             # Returns active config rows to ADF
+│   │   ├── 00_update_watermark.py         # Advances the incremental watermark
+│   │   ├── 01_ingest_hana_to_landing.py   # SAP HANA via JDBC → landing Parquet
+│   │   ├── 01_ingest_to_bronze.py         # Landing Parquet → Bronze Delta
+│   │   ├── 02_bronze_to_silver.py         # Type cast, DQ, SCD2 merge
+│   │   ├── 03_silver_to_gold.py           # Dimensions, surrogate keys, fact
+│   │   └── 04_aggregated_audit.py         # KPI aggregation and transposition
+│   └── utilities/
+│       ├── transformations.py             # Transform strategies + SCD2 merges
+│       ├── dq_checks.py                   # DQ check strategies + runner
+│       ├── audit_helper.py                # Audit and DQ logging
+│       └── data_quality.py
 ├── data_model/
-│   ├── 00_data_model_design.sql        # Architecture docs and design rationale
 │   ├── 01_bronze_schema.sql
 │   ├── 02_silver_schema.sql
-│   └── 03_gold_schema.sql
-├── sql/
-│   ├── 01_audit_tables.sql             # Audit tables, DQ log, metadata, stored procs
-│   └── 02_aggregation_views.sql        # Monitoring views for operators
-└── tests/
-    └── test_data_quality.py            # pytest: DQ functions, period derivation, aggregation
+│   ├── 03_gold_schema.sql                 # Star schema + v_forecast_star view
+│   ├── 04_audit_schema.sql
+│   └── 05_pipeline_config.sql             # Config table + seed rows
+├── sql/                                   # Source-system seed and delta scripts
+├── salesforce/                            # SFDX object metadata + data generators
+├── tests/test_data_quality.py
+└── docs/
 ```
 
 ---
 
-## Build phases
+## The medallion layers
 
-### Phase 0 — Environment setup
+### Bronze — `hpe_catalog.bronze.o9_forecast_raw`
 
-- Provision all Azure resources via the Azure CLI or Portal: resource group, ADLS Gen2 (5 containers), Azure SQL Database, Databricks workspace (Standard SKU), Data Factory, and Key Vault. See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) Step 1 for the exact commands.
-- Set up Unity Catalog: a catalog (`hpe_catalog`) with schemas `bronze`, `silver`, `gold`.
-- Create the Azure SQL audit database schema: run `sql/01_audit_tables.sql` to create `audit.pipeline_audit`, `audit.data_quality_log`, and `audit.pipeline_metadata`.
-- Seed `pipeline_metadata` with one row per data subject + frequency (daily, weekly, monthly, quarterly), including the null-check columns, partition column, group columns, and metric columns for each.
-- Connect the Databricks workspace to your Git repo via Repos.
+Reads landing Parquet, normalises column names to lowercase (HANA returns uppercase; Salesforce carries `__c` suffixes), and casts **everything to STRING** — Bronze is schema-on-read and never fails on a type.
 
-**Acceptance:** all resources provision cleanly; you can run notebook `00_config.py` and see it resolve paths; a `SELECT * FROM audit.pipeline_metadata` returns four rows; Unity Catalog explorer shows `hpe_catalog.bronze`, `.silver`, `.gold` schemas.
+- Adds `_file_name`, `_ingestion_ts`, `_update_ts`, `_frequency`, `_load_job_nr`, `_batch_id`
+- Runs `NullPKCheck` and `DedupCheck`, routing failures to `bronze.quarantine` with a `_dq_fail_reason`
+- Writes **append** with `mergeSchema`, partitioned by `_frequency`
+- Copies the source files to the `archive` container
 
-### Phase 1 — Bronze: raw ingestion with full audit
+All four subjects share this table. Append plus `_frequency` partitioning is what keeps them from overwriting each other.
 
-- ADF pipeline `pl_master_etl_pipeline` performs a **Lookup** activity against `audit.pipeline_metadata` to fetch runtime config, then a **GetMetadata** to check whether files exist in the landing zone.
-- **IfCondition** branches: if files exist, run notebook `01_ingest_to_bronze.py`; if not, write a `NO_DATA` audit entry and stop cleanly.
-- Notebook reads CSV (pipe-delimited) with all columns as `STRING` — schema-on-read, no casting at this layer.
-- Adds operational audit columns: `_file_name`, `_ingestion_ts`, `_source_batch_nr`, `_batch_id`, `_load_job_nr`, `_frequency`.
-- Writes to `hpe_catalog.bronze.o9_forecast_raw` in **overwrite** mode — Bronze is always the full latest snapshot, not an accumulation.
-- Archives source files to `archive/o9_forecast_{frequency}/{timestamp}/` post-load.
-- Writes a `SUCCESS` or `FAILED` audit entry to `audit.pipeline_audit` (batch_id, src_count, tgt_count, duration).
+### Silver — `hpe_catalog.silver.o9_forecast_ref`
 
-**Acceptance:** running the pipeline twice with the same file produces the same Bronze row count (idempotent overwrite, not an append); a new file in landing is picked up on the next run; archive container shows the processed file; `audit.pipeline_audit` shows a new row with correct counts.
+- **Filters Bronze to its own `_frequency`** — all four subjects share the Bronze table, so this filter is mandatory
+- Empty strings → `NULL`, then casts `forecast_date` to `DATE` and the two measures to `DECIMAL`
+- Runs `DomainCheck` on `category` and `currency` — **informational only**, rows are kept and the violation is logged
+- Applies a **two-pass SCD Type 2 merge** on the six-column business grain
+- Writes a period roll-up to `silver.o9_forecast_period_agg`
+- Partitioned by `_ingestion_date`
 
-### Phase 2 — Silver: cleanse, conform, enforce quality
+### Gold — star schema
 
-- Load metadata from SQL at runtime: which columns are null-check targets, what the partition column is.
-- **NULL checks** on business keys (`product_id`, `location_id`, `forecast_date`): split records into valid and invalid sets.
-- **Empty string → NULL** conversion across all STRING columns so downstream logic can use `IS NULL` reliably.
-- **Type casting**: `forecast_date` to `DATE`, `forecast_qty` and `revenue_amount` to `DECIMAL`.
-- Log data quality results to `audit.data_quality_log` — check type, pass count, fail count, pass rate.
-- Append valid records to `hpe_catalog.silver.o9_forecast_ref` — Silver **accumulates history**, it never overwrites.
-- Quarantine invalid rows (logged, not lost): error count tracked in the audit entry.
+| Table | Type | Notes |
+|---|---|---|
+| `dim_product` | SCD Type 2 | `product_sk = sha2(product_id ‖ effective_from)` |
+| `dim_location` | SCD Type 2 | `location_sk = sha2(location_id ‖ effective_from)` |
+| `dim_time` | Insert-only | A calendar date's attributes never change |
+| `fact_forecast` | Periodic snapshot | Partitioned by `period`, `_frequency` |
+| `v_forecast_star` | View | Rejoins the star for ad-hoc queries |
 
-**Acceptance:** introducing a row with a null `product_id` in the source causes it to be excluded from Silver and logged in `data_quality_log` with check_type `NULL_CHECK`; re-running the same batch produces no new Silver rows (the audit entry shows the same counts); `vw_dq_summary` view shows the pass rate for each check.
+The fact grain is one row per product / location / date / channel / customer / frequency. Because a forecast is an estimate that gets **restated** rather than an event that accumulates, each run rebuilds its own slice with `replaceWhere _frequency = '<freq>'`, leaving the other three subjects untouched.
 
-### Phase 3 — Gold: dimensional model and KPI aggregation
+### Aggregated audit
 
-- **Notebook 03 (silver_to_gold):** derives a `period` column (normalised to `YYYY-MM-01`) from `forecast_date` when `apply_concat = true` in metadata — so a row dated `2024-01-15` lands in period `2024-01-01` for clean monthly partitioning.
-- Writes to `hpe_catalog.gold.o9_forecast_dmnsn` partitioned by `(period, _frequency)` in **overwrite** mode — Gold dimensions are always fully refreshed, never partially updated.
-- Builds `dim_product`, `dim_location`, `dim_time` dimension tables with surrogate keys; `dim_product` and `dim_location` track changes via **SCD Type 2** (`valid_from`, `valid_to`, `is_current`).
-- **Notebook 04 (aggregated_audit):** filters today's Gold data, groups by `file_name`, sums `forecast_qty` and `revenue_amount`, then **transposes** using `stack()` into `(file_name, keyfigure, total_qty_amount)` rows for a reporting-friendly format. Appends to `hpe_catalog.gold.o9_forecast_agg_audit`.
+`04_aggregated_audit` reads `v_forecast_star` filtered to the current batch, aggregates by period / frequency / category / region, then transposes the measures into `(keyfigure, kpi_value)` rows using `stack()` built dynamically from the metric list.
 
-**Acceptance:** a query joining `o9_forecast_dmnsn` to `dim_product` and `dim_location` via surrogate keys returns the correct row count; `o9_forecast_agg_audit` has two rows per file (one for `forecast_qty`, one for `revenue_amount`); changing a product's attribute in Silver and re-running creates a new SCD2 version with the old one closed off (`is_current = false`).
-
-### Phase 4 — Orchestration: schedules, retries, alerting
-
-- ADF `pl_master_etl_pipeline` is fully parameterised on `data_subject` and `storage_account`, so one pipeline definition serves all four frequencies.
-- Four triggers fire independently: `tr_daily_schedule` (6:00 AM UTC), `tr_weekly_schedule` (Monday 7:00 AM), `tr_monthly_schedule` (1st 8:00 AM), `tr_quarterly_schedule` (1st 9:00 AM). Each passes a different `data_subject` parameter.
-- Notebook activities have **retries** (1–2 retries, 30–60 s interval) and **timeouts** (1–10 min per step) configured in the pipeline JSON.
-- A failure in Silver halts Gold — Gold never runs against uncleansed data.
-
-**Acceptance:** a forced failure in the Silver notebook (e.g., raise an exception) stops the Gold notebook from running and writes a `FAILED` entry to `audit.pipeline_audit`; the `vw_latest_pipeline_runs` view shows the failure; the daily trigger fires automatically the next morning without manual intervention.
-
-### Phase 5 — Data quality framework and audit views
-
-- Centralise reusable checks in `databricks/utilities/data_quality.py`: `validate_not_null()`, `validate_data_types()`, `validate_duplicates()`, `nullify_empty_strings()`, `log_dq_results()`. Each function is independently unit-testable.
-- `audit_helper.py` encapsulates `write_audit_entry()` and `mark_audit_failed()` — every notebook calls these, never writes directly to SQL ad-hoc.
-- SQL views in `sql/02_aggregation_views.sql` provide operator-facing monitoring: `vw_latest_pipeline_runs` (last 7 days), `vw_daily_load_summary` (success/failure counts, total rows, avg duration), `vw_dq_summary` (pass rates by table and check type), `vw_aggregated_audit` (KPI metrics from Gold).
-
-**Acceptance:** `pytest tests/test_data_quality.py` passes all tests; `vw_dq_summary` shows a pass rate below 100% when you seed a bad row; `vw_daily_load_summary` shows the correct row and duration for today's run.
-
-### Phase 6 — Governance and performance hardening
-
-- Apply Unity Catalog grants: a "read-only analyst" role can `SELECT` on Gold schemas but not Bronze or Silver.
-- Confirm lineage graph in Unity Catalog shows Bronze → Silver → Gold for `o9_forecast_raw` → `o9_forecast_ref` → `o9_forecast_dmnsn`.
-- Apply partition pruning on Silver (`_ingestion_date`) and Gold (`period`, `_frequency`) — validate with `EXPLAIN` that queries use partition filters.
-- Run `OPTIMIZE` with `ZORDER BY (product_id, location_id)` on Gold after initial load; benchmark before/after file scan counts.
-- All secrets (storage key, SQL connection string) reference Key Vault in the linked service definitions — no credentials in code or ADF JSON.
-
-**Acceptance:** a user with analyst-only grants gets a permission error querying Bronze; the Unity Catalog lineage graph is a straight line Bronze → Silver → Gold; `DESCRIBE DETAIL hpe_catalog.gold.o9_forecast_dmnsn` shows the ZORDER columns; you can quantify the before/after improvement in files scanned.
+If the passed `batch_id` matches zero rows it **fails loudly** rather than reporting success — a wiring error that reports green is worse than one that stops the pipeline.
 
 ---
 
 ## Design decisions
 
-These are the choices to make deliberately and be ready to justify.
-
-| Decision | What was chosen | Why |
+| Decision | Choice | Rationale |
 |---|---|---|
-| Storage format | Delta Lake over plain Parquet | ACID transactions, `MERGE`/upserts, schema enforcement, time travel — Parquet alone has none of these. |
-| Orchestrator | Azure Data Factory over Databricks Workflows | ADF orchestrates across heterogeneous Azure services (ADLS file checks, SQL lookups, Databricks notebooks) in a single DAG; Workflows is tighter when all work is Databricks-only. |
-| Metadata-driven config | Runtime lookup from `audit.pipeline_metadata` | Adding a new data subject or frequency requires a SQL `INSERT`, not a code change — the pipeline is the same for all variants. |
-| Bronze write mode | Overwrite (full snapshot) | Bronze is a raw mirror of the source; appending would accumulate duplicates across re-runs. The archive container preserves the original files for replay. |
-| Silver write mode | Append (historical accumulation) | Silver is the system of record — it must never lose cleansed history. Overwrites would destroy the audit trail. |
-| Gold write mode | Overwrite for dimensions, append for agg_audit | Dimensions are fully refreshed on each run (SCD2 is handled explicitly); the aggregation audit table grows incrementally for trend reporting. |
-| Idempotency | Overwrite for Bronze/Gold, append-by-batch_id for Silver | Re-running any notebook produces the same result — no duplicates, no gaps. Silver uses `batch_id` in the audit log to confirm a batch was already loaded. |
-| Audit strategy | Centralised Azure SQL database | Every layer writes structured audit entries (batch_id, status, row counts, duration) to a single queryable store — no scattered log files. |
-| DQ policy | Hard fail on null PKs, soft quarantine for type issues | Null primary keys are unrecoverable and must stop the pipeline; type mismatches can be isolated and investigated without blocking valid rows. |
-| Secrets | Azure Key Vault references in linked services | No credentials in code, notebooks, or ADF JSON checked into source control. |
+| Storage format | Delta over plain Parquet | ACID, `MERGE`, `replaceWhere`, schema evolution, time travel. The SCD2 logic is impossible without atomic upserts. |
+| Metadata store | Unity Catalog Delta, not Azure SQL | Removes a service, an identity, and a JDBC dependency. Config lives beside the data it governs. |
+| Config-driven pipeline | Runtime lookup from `pipeline_config` | A new data subject is one `INSERT` plus a trigger — no notebook change, no redeploy. |
+| Shared Bronze / fact tables | One table, partitioned by `_frequency` | All four subjects share a business grain. Four physical tables would mean a `UNION ALL` in every downstream query. |
+| Bronze write mode | Append + `mergeSchema` | Preserves all four frequency partitions and absorbs source-specific extra columns. |
+| Silver write mode | Two-pass SCD2 `MERGE` | Silver is the system of record; attribute history has analytical value. |
+| Gold fact write mode | `replaceWhere` on `_frequency` | The fact is a periodic snapshot — a restatement must replace, not accumulate. A plain overwrite would drop the other three subjects. |
+| Surrogate keys | `sha2(natural_key ‖ effective_from)` | Deterministic and reproducible, so a dimension rebuild does not orphan the fact. Identity columns are order-dependent and need cross-executor coordination. |
+| DQ policy | Hard-fail PK/dedup, informational domain | A null business key is unrecoverable. An unexpected currency is often a legitimately new value — flag it, don't drop it. |
+| Secrets | Databricks secret scope | No credentials in code, notebooks, or the ADF JSON in Git. |
+| HANA extraction | Databricks JDBC, not ADF Copy | SAP's free Windows client ships without a TLS crypto library; the JVM handles TLS natively. |
+
+### Design patterns
+
+Transformations and DQ checks are both implemented as the **Strategy pattern** — every transform implements `apply(df) -> df` and every check implements `run(df) -> (valid_df, invalid_df, result)`. Notebooks compose a list and hand it to a runner:
+
+```python
+enriched_df = apply_transforms(raw_df, [
+    AddAuditColumnsTransform(frequency=frequency, load_job_nr=load_job_nr, batch_id=batch_id),
+    StandardizeTransform(upper_cols=["category"]),
+])
+```
+
+Adding a transform or a check is a new class. The notebooks never change, and each strategy is unit-testable without Spark orchestration.
 
 ---
 
-## Tradeoffs
+## Known tradeoffs and limitations
 
-Be honest about these in interviews — acknowledging tradeoffs is a senior signal.
+Stated plainly, because they are real:
 
-- **ADF vs Databricks Workflows:** ADF adds a separate service to manage and its expression language is JSON-based and harder to test than Python. It earns its place here because the pipeline needs to check ADLS file existence and query SQL metadata *before* launching Databricks — that cross-service orchestration is where ADF excels. A Databricks-only shop would use Workflows and handle the file checks inside the notebooks.
-- **Overwrite on Bronze vs append:** Overwriting Bronze means you lose the ability to query "what did the source look like three weeks ago" from the Delta table. The archive container partially compensates, but Delta time travel on Bronze would be richer. Overwrite was chosen to keep Bronze storage bounded and prevent the table from accumulating duplicate ingestions during development reruns.
-- **Append on Silver vs MERGE:** Appending to Silver is simpler and performant, but it means querying Silver must always filter by `_batch_id` or `_ingestion_date` to avoid double-counting. A MERGE on the business key would be safer for analytical queries but adds SCD2-style complexity at the cleansing layer. Documented as a known limitation.
-- **SCD Type 2 vs SCD Type 1 on dimensions:** Type 2 multiplies row counts and requires every fact query to join on `is_current = true` or a validity window. Type 1 is simpler and cheaper but destroys historical accuracy (what segment a product *was* at order time). Chosen Type 2 on dimensions where the history has analytical value.
-- **Compute cost vs realism:** Development on a small single-node Databricks cluster (or Free Edition) keeps costs near zero but won't surface shuffle and skew problems that appear at production scale. Acknowledge this as a deliberate demo constraint.
-- **Audit DB in Azure SQL vs Delta tables:** Storing audit data in Azure SQL gives you transactional writes and easy SQL tooling for monitoring. Storing it in Delta would keep everything in the lakehouse. SQL was chosen because audit writes are low-volume and transactional, not analytical — SQL's strengths, not Spark's.
-
----
-
-## Data quality strategy
-
-Centralise reusable checks in `databricks/utilities/data_quality.py`:
-
-| Check | Function | Policy |
-|---|---|---|
-| Null / empty primary keys | `validate_not_null()` | **Hard fail** — invalid rows excluded, error count logged; if error rate exceeds threshold, halt the run |
-| Type casting failures | `validate_data_types()` | **Soft quarantine** — bad rows isolated and logged, valid rows continue to Silver |
-| Duplicate business keys | `validate_duplicates()` | **Soft quarantine** — keep latest record per key, log duplicates |
-| Empty strings on nullable columns | `nullify_empty_strings()` | **Auto-correct** — replace `""` with `NULL` so downstream `IS NULL` checks are reliable |
-
-Every check logs a row to `audit.data_quality_log` with `check_type`, `pass_count`, `fail_count`, and `pass_rate`. The `vw_dq_summary` view aggregates these for operator dashboards. Document your threshold policy (e.g., fail the run if `pass_rate < 0.95` on a null check) in `audit.pipeline_metadata`.
+- **Bronze is not idempotent.** It appends, so re-running the same landing files duplicates rows. The dedup check and Silver's SCD2 merge absorb this so Gold stays correct, but the proper fix is an idempotency guard on `job_log` or a `MERGE` on natural key plus `_file_name`.
+- **The fact loses forecast-evolution history.** A periodic snapshot keeps only the current estimate. Silver's SCD2 retains the history, but answering "what did we forecast last month?" from Gold would need a snapshot date added to the fact grain.
+- **Over-partitioned for the data volume.** At roughly 2M rows, partitioning by `period` and `_frequency` produces partitions far below the ~1GB rule of thumb. `_frequency` alone plus `ZORDER` on the high-cardinality columns would suit the current scale; the current layout anticipates production volume.
+- **`get_pipeline_metadata` interpolates SQL.** The value comes from an ADF parameter rather than user input, so the risk is low, but a parameterised read or an allowlist would be the better default.
+- **Row counts trigger extra jobs.** Several `.count()` calls exist mainly for logging. Caching before multiple actions, or reading Delta's `DESCRIBE HISTORY` operation metrics, would avoid the recomputation.
+- **The Salesforce full load is partial.** ~84,000 of 108,000 records loaded; a Developer Edition org caps at 10MB of storage. The pipeline handled the partial load correctly and the audit counts reflect exactly what arrived.
+- **Demo-scale compute.** A single-user cluster over ~2M rows will not surface the shuffle-skew and spill problems that appear at production scale. A deliberate cost constraint, not a claim about scale.
 
 ---
 
-## What each piece demonstrates (interview map)
+## Deployment
 
-Use this to connect the work to the questions you'll be asked:
+Full step-by-step commands are in [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md).
 
-- ADF Lookup + IfCondition → "How do you make a pipeline metadata-driven?"
-- ADF GetMetadata + NO_DATA path → "How do you handle missing source files gracefully?"
-- Multi-frequency triggers → "How do you run the same pipeline on different schedules without duplicating code?"
-- Bronze overwrite + archive → "How do you design an idempotent raw ingestion layer?"
-- Silver append + null checks → "How do you enforce data quality without losing history?"
-- SCD Type 2 on dimensions → "How do you track slowly changing attributes over time?"
-- Gold overwrite + ZORDER → "How do you optimise query performance on a large fact table?"
-- `stack()` transposition in aggregation → "How do you pivot data in PySpark without a fixed schema?"
-- `audit.pipeline_audit` + views → "How do you make a pipeline observable?"
-- Key Vault linked service → "How do you manage secrets in a production pipeline?"
-- `test_data_quality.py` → "How do you test a data pipeline?"
+1. **Provision Azure resources** — resource group, ADLS Gen2 with the six containers, Databricks workspace, Data Factory.
+2. **Set up Unity Catalog** — create an Access Connector, grant it Storage Blob Data Contributor, create the storage credential and external location, then `CREATE CATALOG hpe_catalog MANAGED LOCATION 'abfss://unity-catalog@…'`.
+3. **Create the schemas** — run `data_model/01`–`05` in order. `05_pipeline_config.sql` seeds the four data-subject rows.
+4. **Create secrets** — `databricks/secrets_setup.sh` populates the `hpe-forecast` scope: ADLS account name and key, SAP HANA / SQL Server / Salesforce credentials, and the service principal used for the ADLS OAuth mount.
+5. **Install the HANA JDBC driver** — upload `ngdbc.jar` to the cluster. Requires **Single User** access mode; Unity Catalog's artifact allowlist blocks JAR installs on Shared clusters unless a metastore admin adds an entry.
+6. **Register the SHIR** — install the Self-hosted Integration Runtime on the machine with SQL Server access and register it with the auth key from ADF.
+7. **Import Databricks notebooks** via Repos, then **deploy the ADF resources** (linked services, datasets, IR, pipelines, triggers).
+8. **Seed the source systems** — `sql/04`–`06` for HANA and SQL Server, `salesforce/generate_full_load.py` for Salesforce.
+9. **Run tests** — `pip install pyspark pytest && pytest tests/`.
+10. **Enable the four triggers.**
+
+To re-run the medallion from scratch, `sql/10_reset_medallion.sql` clears all four subjects' Bronze, Silver, and Gold state.
 
 ---
 
-## How to deploy
+## Operational notes
 
-1. **Provision infrastructure:** create the resource group, ADLS, SQL, Databricks, ADF, and Key Vault via the Azure CLI or Portal — see [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) Step 1.
-2. **Store secrets:** add the ADLS key and SQL connection string to Key Vault; update linked service JSON references to match your Key Vault name.
-3. **Create audit schema:** connect to the Azure SQL Database and run `sql/01_audit_tables.sql` to create tables, stored procedures, and seed `pipeline_metadata`.
-4. **Import Databricks notebooks:** upload `databricks/notebooks/` and `databricks/utilities/` to your Databricks workspace. Set the Unity Catalog to `hpe_catalog`.
-5. **Import ADF resources:** publish the linked services, datasets, pipeline, and triggers from the `adf/` folder into your Data Factory instance.
-6. **Configure linked services:** update `ls_adls_gen2.json`, `ls_azure_databricks.json`, and `ls_azure_sql_audit.json` with your workspace URLs and Key Vault name.
-7. **Enable triggers:** activate the four ADF triggers (`tr_daily_schedule`, `tr_weekly_schedule`, `tr_monthly_schedule`, `tr_quarterly_schedule`).
-8. **Run tests:** `pip install pyspark pytest && pytest tests/` — all tests should pass before your first production trigger fires.
+Every layer of every run writes a row to `hpe_catalog.audit.job_log`:
+
+```sql
+SELECT layer, status, records_inserted, records_updated, error_records, error_message
+FROM   hpe_catalog.audit.job_log
+WHERE  run_id = '<adf-run-id>'
+ORDER  BY insert_time;
+```
+
+Batch ids are prefixed by stage (`bronze_…`, `silver_…`, `gold_…`, `agg_…`), so a failing row names its own layer. Failures are wrapped so the audit entry is written **before** the exception re-raises — ADF sees the failure and the diagnostic row still exists.
+
+DQ pass rates come from `hpe_catalog.audit.data_quality_log`, which records checked / passed / failed counts per check per batch.
+
+Within `pl_master_etl_pipeline`, each notebook depends on its predecessor succeeding, so a Silver failure prevents Gold from ever running against uncleansed data.
 
 ---
 
 ## Future enhancements
 
-- Add a **streaming Bronze path** (Structured Streaming from Event Hubs or Kafka) for near-real-time forecast updates alongside the batch files.
-- Replace hand-rolled SCD2 logic with **Delta `MERGE`** on the dimension tables to make the upsert semantics explicit and auditable.
-- Introduce **Delta Live Tables / Lakeflow** declarative pipelines and compare the maintainability against the current notebook approach.
-- Add **expectations-based data observability**: freshness monitors (alert if Silver hasn't been updated in N hours), volume monitors (alert if row count drops > 20% vs prior run).
-- Extend the **CI/CD pipeline** to run `pytest` on pull requests and deploy the ADF pipeline JSON to a dev factory automatically using the ADF CI/CD integration with GitHub Actions.
-- Add **cost monitoring**: Databricks cluster policy to cap DBU consumption, plus Azure Cost Management alerts.
+- Idempotency guard on Bronze, keyed on `job_log`
+- `OPTIMIZE … ZORDER BY (product_id, location_id)` on the fact, plus scheduled `VACUUM`
+- Broadcast the dimension tables in the Gold join — they are small enough to eliminate that shuffle entirely
+- Freshness and volume monitors (alert when a layer has not loaded in N hours, or row count drops more than 20% against the prior run)
+- CI: run `pytest` on pull requests and deploy the ADF JSON to a dev factory via GitHub Actions
+- A streaming Bronze path via Auto Loader for near-real-time forecast updates
