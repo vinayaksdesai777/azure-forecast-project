@@ -58,7 +58,7 @@
                                 "retryIntervalInSeconds": 60
                             },
                             "typeProperties": {
-                                "notebookPath": "/Repos/hpe-forecast/databricks/notebooks/01_landing_to_silver",
+                                "notebookPath": "/Workspace/Users/vinayakdesai604_gmail.com#ext#@vinayakdesai604gmail.onmicrosoft.com/azure-forecast-project/databricks/notebooks/01_landing_to_silver",
                                 "baseParameters": {
                                     "data_subject": {
                                         "value": "@pipeline().parameters.data_subject",
@@ -97,7 +97,7 @@
                                 "retryIntervalInSeconds": 60
                             },
                             "typeProperties": {
-                                "notebookPath": "/Repos/hpe-forecast/databricks/notebooks/03_silver_to_gold",
+                                "notebookPath": "/Workspace/Users/vinayakdesai604_gmail.com#ext#@vinayakdesai604gmail.onmicrosoft.com/azure-forecast-project/databricks/notebooks/03_silver_to_gold",
                                 "baseParameters": {
                                     "data_subject": {
                                         "value": "@pipeline().parameters.data_subject",
@@ -135,7 +135,7 @@
                                 "retryIntervalInSeconds": 60
                             },
                             "typeProperties": {
-                                "notebookPath": "/Repos/hpe-forecast/databricks/notebooks/04_aggregated_audit",
+                                "notebookPath": "/Workspace/Users/vinayakdesai604_gmail.com#ext#@vinayakdesai604gmail.onmicrosoft.com/azure-forecast-project/databricks/notebooks/04_aggregated_audit",
                                 "baseParameters": {
                                     "data_subject": {
                                         "value": "@pipeline().parameters.data_subject",
@@ -163,7 +163,7 @@
                             "description": "No Parquet files in landing — log NO_DATA via audit notebook.",
                             "type": "DatabricksNotebook",
                             "typeProperties": {
-                                "notebookPath": "/Repos/hpe-forecast/databricks/notebooks/00_get_metadata",
+                                "notebookPath": "/Workspace/Users/vinayakdesai604_gmail.com#ext#@vinayakdesai604gmail.onmicrosoft.com/azure-forecast-project/databricks/notebooks/00_get_metadata",
                                 "baseParameters": {
                                     "data_subject": {
                                         "value": "@pipeline().parameters.data_subject",
