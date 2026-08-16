@@ -1,11 +1,11 @@
 {
     "name": "pl_master_etl_pipeline",
     "properties": {
-        "description": "Master orchestration: Landing Parquet → Bronze → Silver → Gold via Databricks notebooks. No Azure SQL. Metadata from Unity Catalog via 00_get_metadata notebook.",
+        "description": "Master orchestration: Landing Parquet → Silver → Gold via Databricks notebooks. No Azure SQL. Metadata from Unity Catalog via 00_get_metadata notebook.",
         "activities": [
             {
                 "name": "Check Source Files Exist",
-                "description": "Checks that ADF already landed Parquet files before kicking off Bronze.",
+                "description": "Checks that ADF already landed Parquet files before kicking off Silver.",
                 "type": "GetMetadata",
                 "dependsOn": [],
                 "policy": {
@@ -202,7 +202,7 @@
         "annotations": [
             "ETL",
             "Medallion",
-            "Bronze-Silver-Gold",
+            "Landing-Silver-Gold",
             "No-Azure-SQL"
         ],
         "folder": {
