@@ -2,21 +2,18 @@
     "name": "ls_salesforce",
     "type": "Microsoft.DataFactory/factories/linkedservices",
     "properties": {
-        "type": "SalesforceServiceCloud",
+        "type": "SalesforceServiceCloudV2",
         "typeProperties": {
-            "environmentUrl": "https://<your-data-cloud-org>.salesforce.com",
-            "username": "<salesforce_user>",
-            "password": {
+            "environmentUrl": "https://<your-domain>.my.salesforce.com",
+            "authenticationType": "OAuth2ClientCredentials",
+            "clientId": "<connected_app_consumer_key>",
+            "clientSecret": {
                 "type": "SecureString",
-                "value": "<salesforce_password>"
-            },
-            "securityToken": {
-                "type": "SecureString",
-                "value": "<salesforce_security_token>"
+                "value": "<connected_app_consumer_secret>"
             },
             "apiVersion": "59.0"
         },
         "annotations": [],
-        "description": "Salesforce Data Cloud org (free trial). Uses SalesforceServiceCloud connector — supports Data Cloud DLO objects (dmle__ prefix). environmentUrl = your Data Cloud org URL (not login.salesforce.com). Set real values via ADF Studio UI."
+        "description": "Classic Salesforce org holding the Forecast__c custom object (monthly subject). Uses the Salesforce Service Cloud V2 connector: type SalesforceServiceCloudV2 with OAuth2ClientCredentials, since V1 (username/password/security token) is at removal stage. environmentUrl is the org's My Domain URL, not login.salesforce.com. Requires a Connected App with client-credentials flow and an execution user holding the 'API Only' permission. This connector reads CRM objects over SOQL/Bulk API 2.0 and cannot read Data Cloud DLOs — the 60-month history is landed directly as Parquet instead. Set real values via ADF Studio UI or Key Vault."
     }
 }

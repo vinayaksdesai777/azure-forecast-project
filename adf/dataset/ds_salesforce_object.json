@@ -11,7 +11,7 @@
                 "type": "string"
             }
         },
-        "type": "SalesforceServiceCloudObject",
+        "type": "SalesforceServiceCloudV2Object",
         "schema": [],
         "typeProperties": {
             "objectApiName": {
@@ -20,6 +20,6 @@
             }
         },
         "annotations": [],
-        "description": "Salesforce Data Cloud object source. objectApiName = DLO API name (e.g. HPE_Forecast_Monthly__dll). ADF uses SalesforceServiceCloudObject type for Data Cloud DLO queries."
+        "description": "Salesforce CRM object source. objectApiName is the custom object API name including its __c suffix (e.g. Forecast__c), supplied from pipeline_config.source_object. Dataset type must match the V2 linked service: SalesforceServiceCloudV2Object."
     }
 }

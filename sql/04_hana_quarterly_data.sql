@@ -88,88 +88,124 @@ BEGIN
     DECLARE v_i             INTEGER;
     DECLARE v_row           INTEGER;
     DECLARE v_rows_per_q    INTEGER := 30000;
+    DECLARE v_prod_key      INTEGER;
+    DECLARE v_loc_ix        INTEGER;
 
     FOR v_q IN v_q_start..v_q_end DO
 
-        -- Map quarter index to start date and fiscal label
-        CASE v_q
-            WHEN  1 THEN v_forecast_date := TO_DATE('2020-07-01'); v_fiscal := '2020-Q3';
-            WHEN  2 THEN v_forecast_date := TO_DATE('2020-10-01'); v_fiscal := '2020-Q4';
-            WHEN  3 THEN v_forecast_date := TO_DATE('2021-01-01'); v_fiscal := '2021-Q1';
-            WHEN  4 THEN v_forecast_date := TO_DATE('2021-04-01'); v_fiscal := '2021-Q2';
-            WHEN  5 THEN v_forecast_date := TO_DATE('2021-07-01'); v_fiscal := '2021-Q3';
-            WHEN  6 THEN v_forecast_date := TO_DATE('2021-10-01'); v_fiscal := '2021-Q4';
-            WHEN  7 THEN v_forecast_date := TO_DATE('2022-01-01'); v_fiscal := '2022-Q1';
-            WHEN  8 THEN v_forecast_date := TO_DATE('2022-04-01'); v_fiscal := '2022-Q2';
-            WHEN  9 THEN v_forecast_date := TO_DATE('2022-07-01'); v_fiscal := '2022-Q3';
-            WHEN 10 THEN v_forecast_date := TO_DATE('2022-10-01'); v_fiscal := '2022-Q4';
-            WHEN 11 THEN v_forecast_date := TO_DATE('2023-01-01'); v_fiscal := '2023-Q1';
-            WHEN 12 THEN v_forecast_date := TO_DATE('2023-04-01'); v_fiscal := '2023-Q2';
-            WHEN 13 THEN v_forecast_date := TO_DATE('2023-07-01'); v_fiscal := '2023-Q3';
-            WHEN 14 THEN v_forecast_date := TO_DATE('2023-10-01'); v_fiscal := '2023-Q4';
-            WHEN 15 THEN v_forecast_date := TO_DATE('2024-01-01'); v_fiscal := '2024-Q1';
-            WHEN 16 THEN v_forecast_date := TO_DATE('2024-04-01'); v_fiscal := '2024-Q2';
-            WHEN 17 THEN v_forecast_date := TO_DATE('2024-07-01'); v_fiscal := '2024-Q3';
-            WHEN 18 THEN v_forecast_date := TO_DATE('2024-10-01'); v_fiscal := '2024-Q4';
-            WHEN 19 THEN v_forecast_date := TO_DATE('2025-01-01'); v_fiscal := '2025-Q1';
-            WHEN 20 THEN v_forecast_date := TO_DATE('2025-04-01'); v_fiscal := '2025-Q2';
-        END CASE;
+        -- Map quarter index to start date and fiscal label.
+        -- Quarter 1 = 2020-07-01, advancing 3 months per index. Derived
+        -- arithmetically rather than as a 20-branch table: SAP HANA Cloud has
+        -- removed the CASE *statement* from SQLScript (only the CASE
+        -- expression and IF/ELSEIF survive), so the original
+        -- "CASE v_q WHEN 1 THEN ... END CASE" raised
+        -- "incorrect syntax near CASE".
+        v_forecast_date := ADD_MONTHS(TO_DATE('2020-07-01'), (v_q - 1) * 3);
+        v_fiscal := TO_NVARCHAR(YEAR(v_forecast_date)) || '-Q' ||
+                    TO_NVARCHAR((MONTH(v_forecast_date) + 2) / 3);
 
         FOR v_i IN 1..v_rows_per_q DO
             -- Global row counter preserves dirty-data spread across all batches
             v_row := (v_q - 1) * v_rows_per_q + v_i;
 
-            v_product_id  := 'HPE-PROD-' || LPAD(TO_NVARCHAR(MOD(v_row, 500) + 1), 4, '0');
-            v_location_id := 'LOC-' || LPAD(TO_NVARCHAR(MOD(v_row * 7, 200) + 1), 3, '0');
+            -- Business-key indexes derived from position WITHIN the quarter, so
+            -- each quarter emits 30,000 distinct (product, location) pairs.
+            -- Keying these to v_row collided badly: product cycled on
+            -- MOD(v_row,500) and location on MOD(v_row*7,200), so the pair
+            -- repeated every LCM(500,200) = 1,000 rows — 30,000 rows/quarter
+            -- collapsed onto 1,000 real combinations, each repeated 30 times.
+            -- FORECAST_QUARTERLY has no unique constraint, so this loaded
+            -- silently and only surfaced downstream as an inflated fact count
+            -- and a fanned-out v_forecast_star.
+            -- 150 product blocks x 200 locations = exactly 30,000.
+            v_prod_key := MOD((v_q - 1) * 150 + (v_i - 1) / 200, 500);
+            v_loc_ix   := MOD(v_i - 1, 200);
+
+            v_product_id  := 'HPE-PROD-' || LPAD(TO_NVARCHAR(v_prod_key + 1), 4, '0');
+            v_location_id := 'LOC-' || LPAD(TO_NVARCHAR(v_loc_ix + 1), 3, '0');
             v_customer_id := 'CUST-' || LPAD(TO_NVARCHAR(MOD(v_row * 13, 50000) + 10000), 5, '0');
 
-            CASE MOD(v_row, 5)
-                WHEN 0 THEN v_channel := 'DIRECT';
-                WHEN 1 THEN v_channel := 'ONLINE';
-                WHEN 2 THEN v_channel := 'PARTNER';
-                WHEN 3 THEN v_channel := 'DISTRIBUTOR';
-                ELSE        v_channel := 'VAR';
-            END CASE;
+            -- NOTE: every branch below uses the CASE *expression* assigned to a
+            -- variable, matching 05_hana_daily_data.sql. SAP HANA Cloud has
+            -- removed the CASE *statement* ("CASE x WHEN 1 THEN stmt; END CASE")
+            -- from SQLScript, which is what raised
+            -- "incorrect syntax near CASE" on this procedure.
+            v_channel := CASE MOD(v_row, 5)
+                WHEN 0 THEN 'DIRECT'
+                WHEN 1 THEN 'ONLINE'
+                WHEN 2 THEN 'PARTNER'
+                WHEN 3 THEN 'DISTRIBUTOR'
+                ELSE        'VAR'
+            END;
 
-            -- Keyed to MOD(v_row, 500), the same expression as v_product_id, so
-            -- a product always carries the same category. MOD(v_row, 7) alone
-            -- made category a property of the row rather than the product.
-            CASE MOD(MOD(v_row, 500), 7)
-                WHEN 0 THEN v_category := 'SERVER';         v_sub_category := 'PROLIANT';
-                WHEN 1 THEN v_category := 'STORAGE';        v_sub_category := 'PRIMERA';
-                WHEN 2 THEN v_category := 'COMPUTE';        v_sub_category := 'SYNERGY';
-                WHEN 3 THEN v_category := 'NETWORKING';     v_sub_category := 'ARUBA';
-                WHEN 4 THEN v_category := 'PRIVATE_CLOUD';  v_sub_category := 'GREENLAKE';
-                WHEN 5 THEN v_category := 'SUPERCOMPUTING'; v_sub_category := 'CRAY_EX';
-                ELSE        v_category := 'AI';             v_sub_category := 'AI_CLUSTER';
-            END CASE;
+            -- Keyed to v_prod_key, the same value as v_product_id, so a product
+            -- always carries the same category. MOD(v_row, 7) alone made
+            -- category a property of the row rather than the product.
+            v_category := CASE MOD(v_prod_key, 7)
+                WHEN 0 THEN 'SERVER'
+                WHEN 1 THEN 'STORAGE'
+                WHEN 2 THEN 'COMPUTE'
+                WHEN 3 THEN 'NETWORKING'
+                WHEN 4 THEN 'PRIVATE_CLOUD'
+                WHEN 5 THEN 'SUPERCOMPUTING'
+                ELSE        'AI'
+            END;
 
-            CASE MOD(v_row, 100)
-                WHEN 0 THEN v_category := 'HARDWARE'; v_sub_category := 'LEGACY';
-                WHEN 1 THEN v_category := 'UNKNOWN';  v_sub_category := 'NA';
-                WHEN 2 THEN v_category := 'MISC';     v_sub_category := 'OTHER';
-                ELSE        v_category := v_category; v_sub_category := v_sub_category;
-            END CASE;
+            v_sub_category := CASE MOD(v_prod_key, 7)
+                WHEN 0 THEN 'PROLIANT'
+                WHEN 1 THEN 'PRIMERA'
+                WHEN 2 THEN 'SYNERGY'
+                WHEN 3 THEN 'ARUBA'
+                WHEN 4 THEN 'GREENLAKE'
+                WHEN 5 THEN 'CRAY_EX'
+                ELSE        'AI_CLUSTER'
+            END;
 
-            -- Keyed to MOD(v_row * 7, 200), the same expression as
-            -- v_location_id, so a location never moves between regions.
-            CASE MOD(MOD(v_row * 7, 200), 4)
-                WHEN 0 THEN v_region := 'NORTH_AMERICA'; v_currency := 'USD';
-                WHEN 1 THEN v_region := 'EMEA';          v_currency := 'EUR';
-                WHEN 2 THEN v_region := 'APJ';           v_currency := 'SGD';
-                ELSE        v_region := 'LATAM';         v_currency := 'BRL';
-            END CASE;
+            -- Dirty-data overrides (~3%: every 100th row gets an invalid
+            -- category). The ELSE keeps the value set above.
+            v_category := CASE MOD(v_row, 100)
+                WHEN 0 THEN 'HARDWARE'
+                WHEN 1 THEN 'UNKNOWN'
+                WHEN 2 THEN 'MISC'
+                ELSE        v_category
+            END;
 
-            CASE v_region
-                WHEN 'NORTH_AMERICA' THEN
-                    CASE MOD(MOD(v_row * 7, 200), 2) WHEN 0 THEN v_country := 'US'; ELSE v_country := 'CA'; END CASE;
-                WHEN 'EMEA' THEN
-                    CASE MOD(MOD(v_row * 7, 200), 3) WHEN 0 THEN v_country := 'DE'; WHEN 1 THEN v_country := 'FR'; ELSE v_country := 'UK'; END CASE;
-                WHEN 'APJ' THEN
-                    CASE MOD(MOD(v_row * 7, 200), 3) WHEN 0 THEN v_country := 'JP'; WHEN 1 THEN v_country := 'IN'; ELSE v_country := 'SG'; END CASE;
-                ELSE
-                    CASE MOD(MOD(v_row * 7, 200), 2) WHEN 0 THEN v_country := 'BR'; ELSE v_country := 'MX'; END CASE;
-            END CASE;
+            v_sub_category := CASE MOD(v_row, 100)
+                WHEN 0 THEN 'LEGACY'
+                WHEN 1 THEN 'NA'
+                WHEN 2 THEN 'OTHER'
+                ELSE        v_sub_category
+            END;
+
+            -- Keyed to v_loc_ix, the same value as v_location_id, so a location
+            -- never moves between regions.
+            v_region := CASE MOD(v_loc_ix, 4)
+                WHEN 0 THEN 'NORTH_AMERICA'
+                WHEN 1 THEN 'EMEA'
+                WHEN 2 THEN 'APJ'
+                ELSE        'LATAM'
+            END;
+
+            v_currency := CASE MOD(v_loc_ix, 4)
+                WHEN 0 THEN 'USD'
+                WHEN 1 THEN 'EUR'
+                WHEN 2 THEN 'SGD'
+                ELSE        'BRL'
+            END;
+
+            -- Country also keyed to v_loc_ix, consistent with the region above.
+            v_country := CASE
+                WHEN MOD(v_loc_ix, 4) = 0 AND MOD(v_loc_ix, 2) = 0 THEN 'US'
+                WHEN MOD(v_loc_ix, 4) = 0                          THEN 'CA'
+                WHEN MOD(v_loc_ix, 4) = 1 AND MOD(v_loc_ix, 3) = 0 THEN 'DE'
+                WHEN MOD(v_loc_ix, 4) = 1 AND MOD(v_loc_ix, 3) = 1 THEN 'FR'
+                WHEN MOD(v_loc_ix, 4) = 1                          THEN 'UK'
+                WHEN MOD(v_loc_ix, 4) = 2 AND MOD(v_loc_ix, 3) = 0 THEN 'JP'
+                WHEN MOD(v_loc_ix, 4) = 2 AND MOD(v_loc_ix, 3) = 1 THEN 'IN'
+                WHEN MOD(v_loc_ix, 4) = 2                          THEN 'SG'
+                WHEN MOD(v_loc_ix, 2) = 0                          THEN 'BR'
+                ELSE                                                    'MX'
+            END;
 
             v_currency := CASE WHEN MOD(v_row, 67) = 0 THEN 'XYZ' ELSE v_currency END;
 

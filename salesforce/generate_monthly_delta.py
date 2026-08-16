@@ -26,7 +26,16 @@ SF_USERNAME      = "vinayaksdesai777@gmail.com"
 SF_PASSWORD      = os.environ.get("SF_PASSWORD", "")
 SF_SECURITY_TOKEN= os.environ.get("SF_TOKEN", "")
 SF_LOGIN_URL     = "https://login.salesforce.com"
-ROWS_PER_MONTH   = 9000
+# One month's incremental refresh. Sized to 84,000 because that is what
+# Developer Edition storage actually holds — the July 10 Bulk load reached
+# exactly 84,000 before STORAGE_LIMIT_EXCEEDED. This is the whole Forecast__c
+# working set: the object holds one month at a time, refreshed each cycle.
+#
+# The 60-month / 387,000-row history is NOT here. It was landed straight to
+# ADLS as Parquet (salesforce/csv_to_landing_parquet.py) because it cannot fit
+# in Developer Edition. These rows are deliberately distinct from that history:
+# they carry 2026 forecast dates, while the landed full load ends 2025-06.
+ROWS_PER_MONTH   = 84000
 OBJECT_API_NAME  = "Forecast__c"
 
 VALID_CATEGORIES = ["SERVER","STORAGE","COMPUTE","NETWORKING",
@@ -51,13 +60,23 @@ def generate_delta_rows(month_str: str) -> list[dict]:
     fiscal_period = month_str   # e.g. "2026-01"
     rows = []
 
+    # Absolute month number, so the per-month product blocks keep rotating
+    # across delta runs instead of every month reusing the same products.
+    month_no = forecast_date.year * 12 + forecast_date.month
+
     for i in range(1, ROWS_PER_MONTH + 1):
-        # Keyed to the same expressions that build product_id / location_id
-        # below, so a product keeps its category and a location keeps its
-        # region and country across every load. Keying them to i directly made
-        # them properties of the row, which churned the Gold SCD2 dimensions.
-        prod_idx = i % 500
-        loc_idx  = (i * 7) % 200
+        # Business keys derived from position WITHIN the month, so all 9,000
+        # rows carry distinct (product, location) pairs. Keying product to
+        # i % 500 and location to (i * 7) % 200 repeated the pair every
+        # lcm(500, 200) = 1000 rows, collapsing the month onto 1,000 real
+        # combinations. ceil(9000/200) = 45 blocks x 200 locations = 9,000.
+        prod_idx = (month_no * 45 + (i - 1) // 200) % 500
+        loc_idx  = (i - 1) % 200
+
+        # Attributes are keyed to those same indexes, so a product keeps its
+        # category and a location keeps its region and country across every
+        # load. Keying them to i directly made them properties of the row,
+        # which churned the Gold SCD2 dimensions.
 
         region   = REGIONS[loc_idx % 4]
         currency = CURRENCY_MAP[region]
@@ -83,8 +102,8 @@ def generate_delta_rows(month_str: str) -> list[dict]:
         elif i % 100 == 1:
             category, sub_category = "UNKNOWN", "NA"
 
-        product_id  = f"HPE-PROD-{(i % 500) + 1:04d}"
-        location_id = f"LOC-{(i * 7 % 200) + 1:03d}"
+        product_id  = f"HPE-PROD-{prod_idx + 1:04d}"
+        location_id = f"LOC-{loc_idx + 1:03d}"
         customer_id = f"CUST-{(i * 13 % 50000) + 10000:05d}"
         qty         = (i * 11 % 9800) + 100
         revenue     = qty * ((i * 31 % 450) + 50)

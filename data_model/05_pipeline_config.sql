@@ -86,16 +86,28 @@ VALUES
      'full', 'modified_dt', NULL,
      'product_id,location_id,forecast_date,channel,customer_id', 'forecast_date', TRUE, 8, TRUE),
 
-    -- Salesforce Data Cloud: monthly strategic planning
-    -- Source: Data Cloud DLO object (HPE_Forecast_Monthly__dll)
-    -- Ingested via Data Cloud Ingestion API (salesforce/generate_full_load.py)
-    -- ADF reads via SalesforceServiceCloud connector + SOQL on DLO
-    -- Incremental by LastModifiedDate once full load is done
+    -- Salesforce: monthly strategic planning
+    -- Source: classic custom object Forecast__c, read by ADF's Salesforce
+    -- connector over SOQL/Bulk API 2.0.
+    --
+    -- NOT Data Cloud. An earlier revision pointed this at a Data Cloud DLO
+    -- (HPE_Forecast_Monthly__dll). ADF's Salesforce connector only supports
+    -- CRM objects on Developer/Professional/Enterprise/Unlimited editions —
+    -- DLOs live in a separate lake reachable only via the Data Cloud Query
+    -- API, which no ADF Salesforce connector speaks. See
+    -- https://learn.microsoft.com/azure/data-factory/connector-salesforce-service-cloud
+    --
+    -- The 60-month / 387,000-row history was landed directly as Parquet
+    -- (salesforce/csv_to_landing_parquet.py) because Developer Edition storage
+    -- tops out near 84,000 records. The ongoing monthly refresh (~84,000 rows)
+    -- does flow through this Salesforce extract, so load_type starts as
+    -- 'incremental' — the full load is already in landing.
+    --
     -- Quarterly data is in SAP HANA Cloud (FORECAST_QUARTERLY) — see o9_forecast_quarterly row above
-    ('o9_forecast_monthly', 'SALESFORCE', 'Salesforce', NULL, 'HPE_Forecast_Monthly__dll',
+    ('o9_forecast_monthly', 'SALESFORCE', 'Salesforce', NULL, 'Forecast__c',
      'monthly', 'o9/monthly/',
      'hpe_catalog.bronze.o9_forecast_raw', 'hpe_catalog.silver.o9_forecast_ref', 'hpe_catalog.gold.fact_forecast',
-     'full', 'LastModifiedDate', NULL,
+     'incremental', 'LastModifiedDate', NULL,
      'product_id,location_id,forecast_date,channel,customer_id', 'forecast_date', TRUE, 4, TRUE);
 
 -- ============================================================

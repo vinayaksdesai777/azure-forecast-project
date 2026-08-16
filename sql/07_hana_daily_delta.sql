@@ -56,52 +56,83 @@ BEGIN
             v_location_id := 'LOC-' || LPAD(TO_NVARCHAR(MOD(v_row * 7, 200) + 1), 3, '0');
             v_customer_id := 'CUST-' || LPAD(TO_NVARCHAR(MOD(v_row * 13, 50000) + 10000), 5, '0');
 
-            CASE MOD(v_row, 5)
-                WHEN 0 THEN v_channel := 'DIRECT';
-                WHEN 1 THEN v_channel := 'ONLINE';
-                WHEN 2 THEN v_channel := 'PARTNER';
-                WHEN 3 THEN v_channel := 'DISTRIBUTOR';
-                ELSE        v_channel := 'VAR';
-            END CASE;
+            -- NOTE: CASE *expressions* assigned to variables, matching
+            -- 05_hana_daily_data.sql. SAP HANA Cloud has removed the CASE
+            -- *statement* from SQLScript, which raised
+            -- "incorrect syntax near CASE". The key expressions themselves are
+            -- unchanged: at 300 rows/day this script never reaches the
+            -- 1,000-row product/location cycle, so it produces no duplicates.
+            v_channel := CASE MOD(v_row, 5)
+                WHEN 0 THEN 'DIRECT'
+                WHEN 1 THEN 'ONLINE'
+                WHEN 2 THEN 'PARTNER'
+                WHEN 3 THEN 'DISTRIBUTOR'
+                ELSE        'VAR'
+            END;
 
             -- Keyed to MOD(v_row, 500), matching v_product_id and the full-load
             -- script, so a product keeps its category across full and delta runs.
-            CASE MOD(MOD(v_row, 500), 7)
-                WHEN 0 THEN v_category := 'SERVER';         v_sub_category := 'PROLIANT';
-                WHEN 1 THEN v_category := 'STORAGE';        v_sub_category := 'PRIMERA';
-                WHEN 2 THEN v_category := 'COMPUTE';        v_sub_category := 'SYNERGY';
-                WHEN 3 THEN v_category := 'NETWORKING';     v_sub_category := 'ARUBA';
-                WHEN 4 THEN v_category := 'PRIVATE_CLOUD';  v_sub_category := 'GREENLAKE';
-                WHEN 5 THEN v_category := 'SUPERCOMPUTING'; v_sub_category := 'CRAY_EX';
-                ELSE        v_category := 'AI';             v_sub_category := 'AI_CLUSTER';
-            END CASE;
+            v_category := CASE MOD(MOD(v_row, 500), 7)
+                WHEN 0 THEN 'SERVER'
+                WHEN 1 THEN 'STORAGE'
+                WHEN 2 THEN 'COMPUTE'
+                WHEN 3 THEN 'NETWORKING'
+                WHEN 4 THEN 'PRIVATE_CLOUD'
+                WHEN 5 THEN 'SUPERCOMPUTING'
+                ELSE        'AI'
+            END;
+
+            v_sub_category := CASE MOD(MOD(v_row, 500), 7)
+                WHEN 0 THEN 'PROLIANT'
+                WHEN 1 THEN 'PRIMERA'
+                WHEN 2 THEN 'SYNERGY'
+                WHEN 3 THEN 'ARUBA'
+                WHEN 4 THEN 'GREENLAKE'
+                WHEN 5 THEN 'CRAY_EX'
+                ELSE        'AI_CLUSTER'
+            END;
 
             -- ~2% dirty categories in delta (less than full load)
-            CASE MOD(v_row, 100)
-                WHEN 0 THEN v_category := 'HARDWARE'; v_sub_category := 'LEGACY';
-                WHEN 1 THEN v_category := 'UNKNOWN';  v_sub_category := 'NA';
-                ELSE        v_category := v_category; v_sub_category := v_sub_category;
-            END CASE;
+            v_category := CASE MOD(v_row, 100)
+                WHEN 0 THEN 'HARDWARE'
+                WHEN 1 THEN 'UNKNOWN'
+                ELSE        v_category
+            END;
+
+            v_sub_category := CASE MOD(v_row, 100)
+                WHEN 0 THEN 'LEGACY'
+                WHEN 1 THEN 'NA'
+                ELSE        v_sub_category
+            END;
 
             -- Keyed to MOD(v_row * 7, 200), matching v_location_id, so a
             -- location keeps its region and country across full and delta runs.
-            CASE MOD(MOD(v_row * 7, 200), 4)
-                WHEN 0 THEN v_region := 'NORTH_AMERICA'; v_currency := 'USD';
-                WHEN 1 THEN v_region := 'EMEA';          v_currency := 'EUR';
-                WHEN 2 THEN v_region := 'APJ';           v_currency := 'SGD';
-                ELSE        v_region := 'LATAM';         v_currency := 'BRL';
-            END CASE;
+            v_region := CASE MOD(MOD(v_row * 7, 200), 4)
+                WHEN 0 THEN 'NORTH_AMERICA'
+                WHEN 1 THEN 'EMEA'
+                WHEN 2 THEN 'APJ'
+                ELSE        'LATAM'
+            END;
 
-            CASE v_region
-                WHEN 'NORTH_AMERICA' THEN
-                    CASE MOD(MOD(v_row * 7, 200), 2) WHEN 0 THEN v_country := 'US'; ELSE v_country := 'CA'; END CASE;
-                WHEN 'EMEA' THEN
-                    CASE MOD(MOD(v_row * 7, 200), 3) WHEN 0 THEN v_country := 'DE'; WHEN 1 THEN v_country := 'FR'; ELSE v_country := 'UK'; END CASE;
-                WHEN 'APJ' THEN
-                    CASE MOD(MOD(v_row * 7, 200), 3) WHEN 0 THEN v_country := 'JP'; WHEN 1 THEN v_country := 'IN'; ELSE v_country := 'SG'; END CASE;
-                ELSE
-                    CASE MOD(MOD(v_row * 7, 200), 2) WHEN 0 THEN v_country := 'BR'; ELSE v_country := 'MX'; END CASE;
-            END CASE;
+            v_currency := CASE MOD(MOD(v_row * 7, 200), 4)
+                WHEN 0 THEN 'USD'
+                WHEN 1 THEN 'EUR'
+                WHEN 2 THEN 'SGD'
+                ELSE        'BRL'
+            END;
+
+            v_country := CASE
+                WHEN MOD(MOD(v_row * 7, 200), 4) = 0 AND MOD(MOD(v_row * 7, 200), 2) = 0 THEN 'US'
+                WHEN MOD(MOD(v_row * 7, 200), 4) = 0                                     THEN 'CA'
+                WHEN MOD(MOD(v_row * 7, 200), 4) = 1 AND MOD(MOD(v_row * 7, 200), 3) = 0 THEN 'DE'
+                WHEN MOD(MOD(v_row * 7, 200), 4) = 1 AND MOD(MOD(v_row * 7, 200), 3) = 1 THEN 'FR'
+                WHEN MOD(MOD(v_row * 7, 200), 4) = 1                                     THEN 'UK'
+                WHEN MOD(MOD(v_row * 7, 200), 4) = 2 AND MOD(MOD(v_row * 7, 200), 3) = 0 THEN 'JP'
+                WHEN MOD(MOD(v_row * 7, 200), 4) = 2 AND MOD(MOD(v_row * 7, 200), 3) = 1 THEN 'IN'
+                WHEN MOD(MOD(v_row * 7, 200), 4) = 2                                     THEN 'SG'
+                WHEN MOD(MOD(v_row * 7, 200), 2) = 0                                     THEN 'BR'
+                ELSE                                                                          'MX'
+            END;
 
             v_currency   := CASE WHEN MOD(v_row, 67) = 0 THEN 'XYZ' ELSE v_currency END;
             v_qty        := TO_DECIMAL(MOD(v_row * 11, 4900) + 10, 12, 2);

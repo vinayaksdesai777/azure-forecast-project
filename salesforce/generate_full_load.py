@@ -99,15 +99,27 @@ def generate_rows(month_str: str) -> list[dict]:
     n      = rows_for_month(month_str)
     rows   = []
 
+    month_idx = all_months().index(month_str)
+
     for i in range(1, n + 1):
-        # Attributes are keyed to the same expressions that build product_id and
-        # location_id, so a product always carries the same category and a
-        # location always sits in the same region/country. Keying them to i
-        # directly made them properties of the row: i % 500 and i % 7 are
-        # coprime, so every product cycled through all 7 categories and the Gold
-        # dimension churned a new SCD2 version on every load.
-        prod_idx = i % 500
-        loc_idx  = (i * 7) % 200
+        # Business keys derive from position WITHIN the month, so each month
+        # emits n distinct (product, location) pairs. Keying product to i % 500
+        # and location to (i * 7) % 200 repeated the pair every
+        # lcm(500, 200) = 1000 rows, so a 6,000-row month collapsed onto 1,000
+        # real combinations. Salesforce has no unique constraint on these
+        # fields, so it loaded silently and only showed up downstream as an
+        # inflated fact count.
+        # ceil(8000/200) = 40 product blocks x 200 locations covers the largest
+        # month; the block offset rotates products across months so all 500 recur.
+        prod_idx = (month_idx * 40 + (i - 1) // 200) % 500
+        loc_idx  = (i - 1) % 200
+
+        # Attributes are keyed to those same indexes, so a product always
+        # carries the same category and a location always sits in the same
+        # region/country. Keying them to i directly made them properties of the
+        # row: i % 500 and i % 7 are coprime, so every product cycled through
+        # all 7 categories and the Gold dimension churned a new SCD2 version on
+        # every load.
 
         region   = REGIONS[loc_idx % 4]
         currency = CURRENCY_MAP[region]
@@ -123,8 +135,8 @@ def generate_rows(month_str: str) -> list[dict]:
         revenue = qty * ((i * 31 % 450) + 50)
 
         rows.append({
-            "product_id":     f"HPE-PROD-{(i % 500) + 1:04d}",
-            "location_id":    f"LOC-{(i * 7 % 200) + 1:03d}",
+            "product_id":     f"HPE-PROD-{prod_idx + 1:04d}",
+            "location_id":    f"LOC-{loc_idx + 1:03d}",
             "forecast_date":  f_date,
             "forecast_qty":   str(qty),
             "revenue_amount": str(revenue),

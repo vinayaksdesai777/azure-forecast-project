@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Salesforce CLI auth state — contains org credentials, never commit
+salesforce/.sf/
+salesforce/.sfdx/
+salesforce/.dc_token_cache.json
+
+# Generated seed data. Regenerate with:
+#   python salesforce/generate_full_load.py --dry-run
+#   python salesforce/generate_monthly_delta.py --month <YYYY-MM> --dry-run
+salesforce/data/
+
+# Bulk API job result files downloaded from Salesforce
+salesforce/*-success-records.csv
+salesforce/*-failed-records.csv
+
+# Local scratch
+*.tmp
+purge_ids.csv

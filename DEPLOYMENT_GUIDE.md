@@ -159,12 +159,25 @@ Delta scripts for incremental runs: [07](sql/07_hana_daily_delta.sql),
 [08](sql/08_hana_quarterly_delta.sql), [09](sql/09_sqlserver_weekly_delta.sql), and
 `salesforce/generate_monthly_delta.py`.
 
-> **Dimension attributes are keyed to the product/location index**, not to the row number.
-> `category` and `sub_category` derive from `(row % 500)`, `region` and `country` from
-> `(row * 7) % 200`. If you edit these scripts, preserve that. Keying an attribute to the
-> row makes every product cycle through all seven categories, and Gold then versions the
-> dimension member on every load — `dim_product` grew to 1,354 rows for 500 products and
-> the star view fanned out to nearly double the fact count.
+> **Business keys are derived from position within the period**, not from the global row
+> number: product from `(period_offset * blocks + (i - 1) / 200) % 500`, location from
+> `(i - 1) % 200`. This gives every period a full set of distinct product-location pairs.
+>
+> The earlier convention keyed product to `(row % 500)` and location to `(row * 7) % 200`.
+> Those two cycles realign every `lcm(500, 200) = 1000` rows, so any period with more than
+> 1,000 rows collapsed onto just 1,000 real combinations — 30,000 rows/quarter became 1,000
+> pairs repeated 30 times. Only SQL Server caught it (its unique constraint threw); HANA and
+> Salesforce have no such constraint and loaded the duplicates silently.
+>
+> **Dimension attributes are keyed to those same indexes**, not to the row number.
+> `category` and `sub_category` derive from the product key, `region`, `country`, and
+> `currency` from the location index. If you edit these scripts, preserve both properties.
+> Keying an attribute to the row makes every product cycle through all seven categories, and
+> Gold then versions the dimension member on every load — `dim_product` grew to 1,354 rows
+> for 500 products and the star view fanned out to nearly double the fact count.
+>
+> `05_hana_daily_data.sql` still keys off the row number and is intentionally unchanged:
+> at 300 rows/day it never reaches the 1,000-row cycle, so it produces no duplicates.
 
 > **Salesforce Developer Edition caps at 10 MB**, so roughly 84,000 of 108,000 records
 > load. Expected; the audit counts reflect what actually arrived.

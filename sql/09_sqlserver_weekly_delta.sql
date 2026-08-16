@@ -31,7 +31,22 @@ raw AS (
     SELECT
         w.wk_offset,
         s.i,
+        -- Global row number, used only for attribute variation and the
+        -- dirty-data cadence — never for the business key.
         w.wk_offset * 8500 + s.i + 1                                            AS rn,
+        -- Business-key indexes derived from position WITHIN the week, so each
+        -- week emits 8,500 distinct (product, location) pairs. Keying these to
+        -- rn (product on rn % 500, location on (rn * 7) % 200) repeated the
+        -- pair every lcm(500,200) = 1000 rows, so each 8,500-row week carried
+        -- ~7,500 duplicates and the very first run failed the unique index.
+        -- 43 product blocks x 200 locations = 8,600 possible, 8,500 used.
+        -- prod_key rotates the per-week blocks through the 500-product
+        -- catalogue as weeks advance, so products recur across runs. Computed
+        -- here in `raw` (not in the enriched SELECT below) because SQL Server
+        -- cannot reference a column alias from a sibling expression in the
+        -- same SELECT list.
+        (w.wk_offset * 43 + s.i / 200) % 500                                    AS prod_key,
+        s.i % 200                                                               AS loc_ix,
         -- Mondays Jan 2026 onwards
         DATEADD(WEEK, w.wk_offset, CAST('2026-01-05' AS DATE))                  AS forecast_date,
         -- modified_dt = Monday of that week + 01:00 (watermark advances each week)
@@ -42,18 +57,22 @@ raw AS (
 enriched AS (
     SELECT
         rn,
+        prod_key,
+        loc_ix,
         forecast_date,
         modified_dt,
         CAST(YEAR(forecast_date) AS NVARCHAR(4)) + N'-W'
             + RIGHT('0' + CAST(DATEPART(ISO_WEEK, forecast_date) AS NVARCHAR(2)), 2)
                                                                                  AS fiscal_period,
 
-        -- ~0.5% NULL product_id (tighter than full load — data is cleaner in incremental)
+        -- ~0.5% NULL product_id (tighter than full load — data is cleaner in
+        -- incremental). Excluded from the filtered unique index, so repeated
+        -- NULLs are fine.
         CASE WHEN rn % 200 = 0 THEN NULL
-             ELSE N'HPE-PROD-' + RIGHT('000' + CAST(rn % 500 + 1 AS NVARCHAR(4)), 4)
+             ELSE N'HPE-PROD-' + RIGHT('000' + CAST(prod_key + 1 AS NVARCHAR(4)), 4)
         END                                                                      AS product_id,
 
-        N'LOC-' + RIGHT('00' + CAST((rn * 7) % 200 + 1 AS NVARCHAR(3)), 3)     AS location_id,
+        N'LOC-' + RIGHT('00' + CAST(loc_ix + 1 AS NVARCHAR(3)), 3)             AS location_id,
         N'CUST-' + RIGHT('0000' + CAST((rn * 13) % 50000 + 10000 AS NVARCHAR(5)), 5)
                                                                                  AS customer_id,
 
@@ -69,7 +88,7 @@ enriched AS (
         CASE
             WHEN rn % 100 = 0 THEN N'HARDWARE'
             WHEN rn % 100 = 1 THEN N'UNKNOWN'
-            ELSE CASE (rn % 500) % 7
+            ELSE CASE prod_key % 7
                 WHEN 0 THEN N'SERVER'      WHEN 1 THEN N'STORAGE'
                 WHEN 2 THEN N'COMPUTE'     WHEN 3 THEN N'NETWORKING'
                 WHEN 4 THEN N'PRIVATE_CLOUD' WHEN 5 THEN N'SUPERCOMPUTING'
@@ -80,7 +99,7 @@ enriched AS (
         CASE
             WHEN rn % 100 = 0 THEN N'LEGACY'
             WHEN rn % 100 = 1 THEN N'NA'
-            ELSE CASE (rn % 500) % 7
+            ELSE CASE prod_key % 7
                 WHEN 0 THEN N'PROLIANT'    WHEN 1 THEN N'PRIMERA'
                 WHEN 2 THEN N'SYNERGY'     WHEN 3 THEN N'ARUBA'
                 WHEN 4 THEN N'GREENLAKE'   WHEN 5 THEN N'CRAY_EX'
@@ -88,22 +107,22 @@ enriched AS (
             END
         END                                                                      AS sub_category,
 
-        CASE ((rn * 7) % 200) % 4
+        CASE loc_ix % 4
             WHEN 0 THEN N'NORTH_AMERICA' WHEN 1 THEN N'EMEA'
             WHEN 2 THEN N'APJ'           ELSE N'LATAM'
         END                                                                      AS region,
 
-        CASE ((rn * 7) % 200) % 4
-            WHEN 0 THEN CASE ((rn * 7) % 200) % 2 WHEN 0 THEN N'US' ELSE N'CA' END
-            WHEN 1 THEN CASE ((rn * 7) % 200) % 3 WHEN 0 THEN N'DE' WHEN 1 THEN N'FR' ELSE N'UK' END
-            WHEN 2 THEN CASE ((rn * 7) % 200) % 3 WHEN 0 THEN N'JP' WHEN 1 THEN N'IN' ELSE N'SG' END
-            ELSE        CASE ((rn * 7) % 200) % 2 WHEN 0 THEN N'BR' ELSE N'MX' END
+        CASE loc_ix % 4
+            WHEN 0 THEN CASE loc_ix % 2 WHEN 0 THEN N'US' ELSE N'CA' END
+            WHEN 1 THEN CASE loc_ix % 3 WHEN 0 THEN N'DE' WHEN 1 THEN N'FR' ELSE N'UK' END
+            WHEN 2 THEN CASE loc_ix % 3 WHEN 0 THEN N'JP' WHEN 1 THEN N'IN' ELSE N'SG' END
+            ELSE        CASE loc_ix % 2 WHEN 0 THEN N'BR' ELSE N'MX' END
         END                                                                      AS country,
 
         -- Currency follows the region, so it stays consistent with the
         -- location-keyed region above.
         CASE WHEN rn % 67 = 0 THEN N'XYZ'
-             ELSE CASE ((rn * 7) % 200) % 4
+             ELSE CASE loc_ix % 4
                 WHEN 0 THEN N'USD' WHEN 1 THEN N'EUR'
                 WHEN 2 THEN N'SGD' ELSE N'BRL'
              END
@@ -134,4 +153,12 @@ FROM dbo.Forecast
 WHERE forecast_date >= '2026-01-01'
 GROUP BY fiscal_period
 ORDER BY fiscal_period;
+GO
+
+-- Business key must stay unique across full load + delta (expect zero rows)
+SELECT product_id, location_id, forecast_date, COUNT(*) AS dupes
+FROM dbo.Forecast
+WHERE product_id IS NOT NULL
+GROUP BY product_id, location_id, forecast_date
+HAVING COUNT(*) > 1;
 GO
