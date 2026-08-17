@@ -16,7 +16,10 @@
                 "typeProperties": {
                     "notebookPath": "/Workspace/Users/vinayakdesai604_gmail.com#ext#@vinayakdesai604gmail.onmicrosoft.com/azure-forecast-project/databricks/notebooks/00_get_metadata",
                     "baseParameters": {
-                        "data_subject": ""
+                        "data_subject": {
+                            "value": "@pipeline().parameters.data_subject",
+                            "type": "Expression"
+                        }
                     }
                 },
                 "linkedServiceName": {
