@@ -341,6 +341,13 @@ Provision  →  Unity Catalog + DDL  →  Secret scope  →  Cluster (Single Use
   allowlist blocks JARs on Shared clusters.
 - **SAP HANA TLS errors.** The free `HDB_CLIENT_NO_CRYPTO` Windows client cannot do TLS —
   that is why HANA is read over JDBC from Databricks rather than by an ADF Copy activity.
+- **`Cannot connect to jdbc:sap://…` / `Object is closed: SecureChannelSession`.** The HANA
+  Cloud instance is stopped. BTP trial instances auto-stop daily. Port 443 still accepts the
+  TCP connection (the load balancer answers), but the TLS handshake is dropped immediately,
+  so the driver reports a closed secure channel rather than a refused connection. Start the
+  instance in BTP Cockpit → SAP HANA Cloud → ⋯ → Start, wait for **Running**, then confirm
+  with `python sql/check_hana_load.py`. This is not a cluster, driver or notebook fault —
+  `openssl s_client -connect <host>:443` fails the same way from any machine.
 - **ADF notebook paths are absolute** and point at the original author's workspace. Update
   them after import or every notebook activity 404s.
 - **Secret scope name** is `hpe-forecast`, case-sensitive. `kv-scope` is from an older
