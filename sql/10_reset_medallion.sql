@@ -12,12 +12,44 @@
 -- hop added no guarantee. See 13_drop_bronze_layer.sql to clear it out.
 -- ============================================================
 
+-- Qualify every name below, so the script does not depend on the session's
+-- current catalog/schema.
+USE CATALOG hpe_catalog;
+
 -- ── Silver ────────────────────────────────────────────────
 -- Shared by all 4 subjects, separated by the _frequency partition.
 TRUNCATE TABLE hpe_catalog.silver.o9_forecast_ref;
 TRUNCATE TABLE hpe_catalog.silver.o9_forecast_period_agg;
 
 -- Structural-DQ rejects. Also append-only, so it accumulates across runs.
+-- CREATE ... IF NOT EXISTS first: run_dq_checks creates this table lazily on
+-- the first quarantined row, so on an environment that has never rejected a
+-- row it does not exist yet and a bare TRUNCATE fails with
+-- TABLE_OR_VIEW_NOT_FOUND. Creating it empty makes the reset idempotent.
+-- Definition kept in step with data_model/02_silver_schema.sql.
+CREATE TABLE IF NOT EXISTS hpe_catalog.silver.quarantine (
+    product_id          STRING,
+    location_id         STRING,
+    forecast_date       STRING,
+    forecast_qty        STRING,
+    revenue_amount      STRING,
+    customer_id         STRING,
+    channel             STRING,
+    category            STRING,
+    sub_category        STRING,
+    region              STRING,
+    country             STRING,
+    currency            STRING,
+    uom                 STRING,
+    _frequency          STRING,
+    _file_name          STRING,
+    _ingestion_ts       TIMESTAMP,
+    _update_ts          TIMESTAMP,
+    _load_job_nr        STRING,
+    _batch_id           STRING,
+    _dq_fail_reason     STRING      COMMENT 'Reason row was quarantined: NULL_PK, DEDUP, etc.'
+) USING DELTA;
+
 TRUNCATE TABLE hpe_catalog.silver.quarantine;
 
 -- ── Gold ──────────────────────────────────────────────────
