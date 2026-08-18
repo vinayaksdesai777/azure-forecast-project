@@ -26,19 +26,21 @@ TRUNCATE TABLE hpe_catalog.silver.o9_forecast_period_agg;
 -- survives a reset. apply_scd2_merge uses whenNotMatchedInsertAll(), which
 -- resolves every target column against the incoming DataFrame, so one stale
 -- column fails the whole merge with DELTA_MERGE_UNRESOLVED_EXPRESSION.
--- period_type is such a leftover: 02_silver_schema.sql does not define it, the
--- Salesforce column map lands it as _period_type, and nothing reads it.
--- Confirm what the live table actually carries before dropping anything else:
---   DESCRIBE TABLE hpe_catalog.silver.o9_forecast_ref;
--- and compare against 02_silver_schema.sql.
+--
+-- These four are raw source column names that leaked in before the
+-- harmonization map in 01_landing_to_silver existed: changed_on is HANA's
+-- CHANGED_ON, modified_dt is the SQL Server watermark, and period_type /
+-- fiscal_period are the unprefixed forms of _period_type / _fiscal_period.
+-- Nothing in databricks/ reads any of them.
+--
 -- DROP COLUMN needs Delta column mapping. If this errors with
--- DELTA_UNSUPPORTED_DROP_COLUMN, enable it first:
---   ALTER TABLE hpe_catalog.silver.o9_forecast_ref SET TBLPROPERTIES (
---     'delta.columnMapping.mode' = 'name',
---     'delta.minReaderVersion' = '2', 'delta.minWriterVersion' = '5');
--- Or, since the table is empty after the TRUNCATE above, just drop and
--- recreate it from data_model/02_silver_schema.sql.
+-- DELTA_UNSUPPORTED_DROP_COLUMN, the table is empty after the TRUNCATE above,
+-- so the simpler route is to DROP TABLE it and re-run
+-- data_model/02_silver_schema.sql.
 ALTER TABLE hpe_catalog.silver.o9_forecast_ref DROP COLUMN IF EXISTS period_type;
+ALTER TABLE hpe_catalog.silver.o9_forecast_ref DROP COLUMN IF EXISTS fiscal_period;
+ALTER TABLE hpe_catalog.silver.o9_forecast_ref DROP COLUMN IF EXISTS changed_on;
+ALTER TABLE hpe_catalog.silver.o9_forecast_ref DROP COLUMN IF EXISTS modified_dt;
 
 -- Structural-DQ rejects. Also append-only, so it accumulates across runs.
 -- CREATE ... IF NOT EXISTS first: run_dq_checks creates this table lazily on

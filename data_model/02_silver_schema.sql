@@ -37,7 +37,16 @@ CREATE TABLE IF NOT EXISTS hpe_catalog.silver.o9_forecast_ref (
     _update_ts          TIMESTAMP   COMMENT 'Update timestamp',
     _ingestion_date     DATE        COMMENT 'Ingestion date (partition key)',
     _silver_load_ts     TIMESTAMP   COMMENT 'Silver layer load timestamp',
-    _batch_id           STRING      COMMENT 'Pipeline batch identifier'
+    _load_job_nr        STRING      COMMENT 'Extract job number, set by AddAuditColumnsTransform',
+    _batch_id           STRING      COMMENT 'Pipeline batch identifier',
+
+    -- Source period labels, kept underscore-prefixed so they stay out of the
+    -- business columns above. 01_landing_to_silver maps the Salesforce
+    -- period_type__c / fiscal_period__c onto these; the HANA and SQL Server
+    -- extracts supply the same two fields. Gold does not read them, but the
+    -- SCD2 merge resolves every target column, so they must be declared.
+    _period_type        STRING      COMMENT 'Source period type: DAILY / WEEKLY / MONTHLY / QUARTERLY',
+    _fiscal_period      STRING      COMMENT 'Source fiscal period label, e.g. 2025-Q2 or 2025-W14'
 )
 USING DELTA
 PARTITIONED BY (_ingestion_date)
