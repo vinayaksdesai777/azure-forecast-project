@@ -1,0 +1,25 @@
+{
+    "name": "ds_landing_folder",
+    "properties": {
+        "description": "Landing folder, for the Get Metadata childItems check in pl_master_etl_pipeline. Points at a folder rather than a file: ds_landing_parquet requires a fileName, and passing the wildcard \"*\" makes Get Metadata's \"exists\" field return false even when the folder holds files, because \"exists\" resolves one concrete path. Enumerating childItems on the folder is the reliable way to ask whether anything landed.",
+        "linkedServiceName": {
+            "referenceName": "ls_adls_gen2",
+            "type": "LinkedServiceReference"
+        },
+        "parameters": {
+            "folderPath": { "type": "string" }
+        },
+        "typeProperties": {
+            "location": {
+                "type": "AzureBlobFSLocation",
+                "fileSystem": "landing",
+                "folderPath": {
+                    "value": "@dataset().folderPath",
+                    "type": "Expression"
+                }
+            }
+        },
+        "schema": [],
+        "type": "Binary"
+    }
+}

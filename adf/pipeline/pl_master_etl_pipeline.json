@@ -15,18 +15,16 @@
                 },
                 "typeProperties": {
                     "dataset": {
-                        "referenceName": "ds_landing_parquet",
+                        "referenceName": "ds_landing_folder",
                         "type": "DatasetReference",
                         "parameters": {
                             "folderPath": {
                                 "value": "@pipeline().parameters.landing_path",
                                 "type": "Expression"
-                            },
-                            "fileName": "*"
+                            }
                         }
                     },
                     "fieldList": [
-                        "exists",
                         "childItems"
                     ]
                 }
@@ -44,7 +42,7 @@
                 ],
                 "typeProperties": {
                     "expression": {
-                        "value": "@activity('Check Source Files Exist').output.exists",
+                        "value": "@greater(length(activity('Check Source Files Exist').output.childItems), 0)",
                         "type": "Expression"
                     },
                     "ifTrueActivities": [
