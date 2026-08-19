@@ -29,7 +29,12 @@ CREATE TABLE IF NOT EXISTS hpe_catalog.silver.o9_forecast_ref (
     -- SCD Type 2 tracking columns
     effective_from      DATE                    COMMENT 'Date this version became active',
     effective_to        DATE                    COMMENT 'Date this version expired (NULL = current)',
-    is_active           BOOLEAN     DEFAULT TRUE COMMENT 'TRUE = current active version',
+    -- No DEFAULT clause: column defaults are a Delta table feature that has to
+    -- be enabled with delta.feature.allowColumnDefaults before a CREATE TABLE
+    -- may use one, which cannot be done for a table that does not exist yet.
+    -- Nothing relies on the default anyway — AddSilverMetaTransform always
+    -- sets is_active explicitly via F.lit(True).
+    is_active           BOOLEAN     COMMENT 'TRUE = current active version',
 
     -- Operational / Audit columns
     _file_name          STRING      COMMENT 'Source file name',
