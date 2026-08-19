@@ -76,6 +76,27 @@ _SF_COL_MAP = {
     "fiscal_period__c": "_fiscal_period",
 }
 
+# Applied to every source after lower-casing. The three systems agree on the
+# business columns but not on the period labels, the watermark, or their
+# surrogate keys — and the SCD2 merge resolves every target column against the
+# incoming DataFrame, so a single unmapped column fails the whole load with
+# DELTA_MERGE_UNRESOLVED_EXPRESSION.
+#
+#   SQL Server  period_type / fiscal_period / modified_dt / forecast_id
+#   SAP HANA    PERIOD_TYPE / FISCAL_PERIOD / CHANGED_ON
+#   Salesforce  period_type__c / fiscal_period__c (renamed by _SF_COL_MAP above)
+#
+# Period labels keep the underscore prefix so they stay out of the business
+# columns. The source watermark and surrogate key are dropped: silver keeps its
+# own audit columns and SCD2 keys, and nothing downstream reads either.
+_COMMON_COL_MAP = {
+    "period_type":   "_period_type",
+    "fiscal_period": "_fiscal_period",
+    "changed_on":    None,   # HANA watermark
+    "modified_dt":   None,   # SQL Server watermark
+    "forecast_id":   None,   # SQL Server IDENTITY surrogate key
+}
+
 try:
     # Use glob to skip zero-byte ADLS placeholder blobs in the landing folder
     glob_path = source_path.rstrip("/") + "/*.parquet"
@@ -88,6 +109,12 @@ try:
             if old_col in raw_df.columns:
                 raw_df = raw_df.drop(old_col) if new_col is None \
                          else raw_df.withColumnRenamed(old_col, new_col)
+
+    # Then the cross-source map, so SQL Server and HANA land the same shape.
+    for old_col, new_col in _COMMON_COL_MAP.items():
+        if old_col in raw_df.columns:
+            raw_df = (raw_df.drop(old_col) if new_col is None
+                      else raw_df.withColumnRenamed(old_col, new_col))
 
     # Schema-on-read: everything lands as string so a source type change cannot
     # break ingestion. TypeCastTransform below decides what each column means.
