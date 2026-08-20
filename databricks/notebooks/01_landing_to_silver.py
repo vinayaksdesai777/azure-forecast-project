@@ -100,6 +100,14 @@ _COMMON_COL_MAP = {
 try:
     # Use glob to skip zero-byte ADLS placeholder blobs in the landing folder
     glob_path = source_path.rstrip("/") + "/*.parquet"
+
+    # Snapshot exactly which files this run consumes, before reading them. The
+    # archive-and-clear at the end removes only these, so a file dropped by a
+    # concurrent extract while this run is in flight is left for the next run
+    # rather than being deleted unread.
+    consumed_files = [f.path for f in dbutils.fs.ls(source_path) if f.path.endswith(".parquet")]
+    print(f"Consuming {len(consumed_files)} landing file(s)")
+
     raw_df = spark.read.format("parquet").load(glob_path)
 
     # Normalize column names (HANA returns UPPERCASE, Salesforce suffixes with __c)
@@ -129,6 +137,13 @@ src_count = raw_df.count()
 print(f"Landing records: {src_count}")
 
 if src_count == 0:
+    # Clear the empty files too, or they accumulate and get re-globbed every
+    # cycle. An extract that matched no rows still writes a header-only Parquet,
+    # which is what a Salesforce run against an empty object produces.
+    for f in consumed_files:
+        dbutils.fs.rm(f)
+    print(f"No rows in {len(consumed_files)} landing file(s); cleared without archiving")
+
     write_audit_entry(spark, batch_id=batch_id, layer="silver", status="SUCCESS",
                       records_inserted=0, source_system=source_system,
                       data_subject=data_subject, object_name=silver_table, run_id=run_id)
@@ -261,9 +276,28 @@ print(f"Period agg written to: {agg_table}")
 
 # COMMAND ----------
 
-# Landing is the raw archive now that Bronze is gone: copy before anything can
-# overwrite the folder on the next extract.
-dbutils.fs.cp(source_path, get_adls_path(CONTAINER_ARCHIVE, f"{data_subject}/{load_job_nr}/"), recurse=True)
+# Landing is a rolling window, not the history: the archive container keeps the
+# raw Parquet permanently, and landing holds only what has not been loaded yet.
+#
+# Copying without clearing made landing append-only, and the read above globs
+# the whole folder — so every cycle re-read all previous extracts and the
+# "incremental" load quietly became a full reload that grew without bound
+# (a daily subject would read 30x its data by day 30).
+#
+# Clear only after the copy is confirmed, and only the files this run read.
+archive_path = get_adls_path(CONTAINER_ARCHIVE, f"{data_subject}/{load_job_nr}/")
+dbutils.fs.cp(source_path, archive_path, recurse=True)
+
+archived = [f.name for f in dbutils.fs.ls(archive_path) if f.name.endswith(".parquet")]
+if len(archived) < len(consumed_files):
+    raise RuntimeError(
+        f"Archive incomplete: {len(consumed_files)} file(s) consumed from landing but "
+        f"{len(archived)} archived at {archive_path}. Landing left untouched."
+    )
+
+for f in consumed_files:
+    dbutils.fs.rm(f)
+print(f"Archived {len(archived)} file(s) to {archive_path}; cleared {len(consumed_files)} from landing")
 
 write_audit_entry(
     spark=spark, batch_id=batch_id, layer="silver", status="SUCCESS",
