@@ -113,7 +113,8 @@ dim_product_src = (
     .withColumn("effective_to",   F.lit(None).cast("date"))
     .withColumn("_load_ts",       F.current_timestamp())
 )
-dim_product_src = build_surrogate_key(dim_product_src, "product_id")
+dim_product_src = build_surrogate_key(dim_product_src, "product_id",
+                                      tracked_cols=["category", "sub_category"])
 
 apply_dim_scd2_merge(
     spark=spark, incoming_df=dim_product_src, target_table=dim_product_table,
@@ -140,7 +141,8 @@ dim_location_src = (
     .withColumn("effective_to",   F.lit(None).cast("date"))
     .withColumn("_load_ts",       F.current_timestamp())
 )
-dim_location_src = build_surrogate_key(dim_location_src, "location_id")
+dim_location_src = build_surrogate_key(dim_location_src, "location_id",
+                                       tracked_cols=["region", "country"])
 
 apply_dim_scd2_merge(
     spark=spark, incoming_df=dim_location_src, target_table=dim_location_table,

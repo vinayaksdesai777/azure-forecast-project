@@ -223,20 +223,31 @@ def apply_scd2_merge(
     return inserted, updated
 
 
-def build_surrogate_key(df: DataFrame, natural_key: str, effective_from_col: str = "effective_from"):
+def build_surrogate_key(df: DataFrame, natural_key: str, effective_from_col: str = "effective_from",
+                        tracked_cols: list = None):
     """
-    Deterministic surrogate key: sha2(natural_key || effective_from).
+    Deterministic surrogate key: sha2(natural_key || effective_from || tracked).
 
     Chosen over GENERATED ALWAYS AS IDENTITY because it is reproducible across
     full reloads and table recreation — the same business row always resolves to
     the same key, so the fact table stays valid if a dimension is rebuilt.
-    Including effective_from means each SCD2 version gets its own key, which is
-    what lets a fact row point at the version that was current when it loaded.
+
+    effective_from alone does NOT separate versions: it has day granularity, so
+    two versions of the same member created in one session hash identically and
+    the dimension ends up with duplicate surrogate keys. A star join on
+    product_sk then matches a fact row against every colliding version — that is
+    how v_forecast_star reached 4,030,130 rows against 1,972,706 facts, while
+    dim_location, which never churns, stayed exact.
+
+    Mixing the tracked attributes into the hash makes the key unique per
+    distinct version regardless of how many land on the same date.
     """
+    parts = [F.col(natural_key).cast("string"), F.col(effective_from_col).cast("string")]
+    for c in (tracked_cols or []):
+        parts.append(F.coalesce(F.col(c).cast("string"), F.lit("")))
     return df.withColumn(
         natural_key.replace("_id", "") + "_sk",
-        F.sha2(F.concat_ws("||", F.col(natural_key).cast("string"),
-                                 F.col(effective_from_col).cast("string")), 256)
+        F.sha2(F.concat_ws("||", *parts), 256)
     )
 
 

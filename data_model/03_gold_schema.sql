@@ -173,6 +173,16 @@ SELECT
     f._gold_load_ts,
     f._batch_id
 FROM       hpe_catalog.gold.fact_forecast f
+-- Join the ACTIVE dimension version only. resolve_dim_sk already pinned each
+-- fact row to the active surrogate key, so re-expanding across every version
+-- here double-counts: a product that churned category has expired versions
+-- alongside the active one, and product_sk is not unique across them —
+-- sha2(product_id || effective_from) collides for two versions created on the
+-- same day, which is what happens when several subjects load in one session.
+-- Without this filter the star fanned out to 4,030,130 rows against 1,972,706
+-- facts, while dim_location (which never churns) stayed exact.
 LEFT JOIN  hpe_catalog.gold.dim_product   p ON f.product_sk  = p.product_sk
+                                           AND p.is_active = true
 LEFT JOIN  hpe_catalog.gold.dim_location  l ON f.location_sk = l.location_sk
+                                           AND l.is_active = true
 LEFT JOIN  hpe_catalog.gold.dim_time      t ON f.date_key    = t.date_key;
