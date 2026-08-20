@@ -239,12 +239,28 @@
                         "data_subject": {
                             "value": "@pipeline().parameters.data_subject",
                             "type": "Expression"
+                        },
+                        "landing_path": {
+                            "value": "@pipeline().parameters.landing_path",
+                            "type": "Expression"
+                        },
+                        "storage_account": {
+                            "value": "@pipeline().parameters.storage_account",
+                            "type": "Expression"
                         }
                     }
                 }
             }
         ],
         "parameters": {
+            "landing_path": {
+                "type": "string",
+                "defaultValue": "o9/daily/"
+            },
+            "storage_account": {
+                "type": "string",
+                "defaultValue": "hpeforecastadls"
+            },
             "data_subject": {
                 "type": "string",
                 "defaultValue": "o9_forecast_daily"

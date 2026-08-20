@@ -10,16 +10,22 @@
                 "startTime": "2024-01-01T08:00:00Z",
                 "timeZone": "UTC",
                 "schedule": {
-                    "monthDays": [1],
-                    "hours": [8],
-                    "minutes": [0]
+                    "monthDays": [
+                        1
+                    ],
+                    "hours": [
+                        8
+                    ],
+                    "minutes": [
+                        0
+                    ]
                 }
             }
         },
         "pipelines": [
             {
                 "pipelineReference": {
-                    "referenceName": "pl_master_etl_pipeline",
+                    "referenceName": "pl_extract_to_landing",
                     "type": "PipelineReference"
                 },
                 "parameters": {
@@ -30,6 +36,6 @@
             }
         ],
         "annotations": [],
-        "description": "Monthly trigger on 1st of each month at 8:00 AM UTC for monthly forecast data"
+        "description": "Fires pl_extract_to_landing, which extracts this subject from its source into landing Parquet and then chains into pl_master_etl_pipeline for the silver and gold load. Pointing a trigger straight at the master pipeline would reprocess whatever Parquet already sits in landing and never pull new source rows."
     }
 }
