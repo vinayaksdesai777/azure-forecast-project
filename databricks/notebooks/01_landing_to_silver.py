@@ -65,7 +65,8 @@ print(f"batch_id: {batch_id}")
 # COMMAND ----------
 
 _SF_COL_MAP = {
-    "id": None,  # drop Salesforce system Id column
+    "id": None,               # drop Salesforce system Id column
+    "lastmodifieddate": None, # Salesforce watermark, read by 00_update_watermark
     "product_id__c": "product_id", "location_id__c": "location_id",
     "forecast_date__c": "forecast_date", "forecast_qty__c": "forecast_qty",
     "revenue_amount__c": "revenue_amount", "customer_id__c": "customer_id",
@@ -84,7 +85,8 @@ _SF_COL_MAP = {
 #
 #   SQL Server  period_type / fiscal_period / modified_dt / forecast_id
 #   SAP HANA    PERIOD_TYPE / FISCAL_PERIOD / CHANGED_ON
-#   Salesforce  period_type__c / fiscal_period__c (renamed by _SF_COL_MAP above)
+#   Salesforce  period_type__c / fiscal_period__c / LastModifiedDate
+#               (all renamed or dropped by _SF_COL_MAP above)
 #
 # Period labels keep the underscore prefix so they stay out of the business
 # columns. The source watermark and surrogate key are dropped: silver keeps its

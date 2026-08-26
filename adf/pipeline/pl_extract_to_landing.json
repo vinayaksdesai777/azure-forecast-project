@@ -152,7 +152,7 @@
                                                     "source": {
                                                         "type": "SalesforceServiceCloudV2Source",
                                                         "query": {
-                                                            "value": "@concat('SELECT Id, Product_Id__c, Location_Id__c, Forecast_Date__c, Forecast_Qty__c, Revenue_Amount__c, Customer_Id__c, Channel__c, Category__c, Sub_Category__c, Region__c, Country__c, Currency_Code__c, UOM__c, Period_Type__c, Fiscal_Period__c FROM ', item().source_object, if(equals(item().load_type, 'incremental'), concat(' WHERE LastModifiedDate > ', replace(replace(item().last_watermark, ' ', 'T'), 'Z', ''), 'Z'), ''))",
+                                                            "value": "@concat('SELECT Id, LastModifiedDate, Product_Id__c, Location_Id__c, Forecast_Date__c, Forecast_Qty__c, Revenue_Amount__c, Customer_Id__c, Channel__c, Category__c, Sub_Category__c, Region__c, Country__c, Currency_Code__c, UOM__c, Period_Type__c, Fiscal_Period__c FROM ', item().source_object, if(equals(item().load_type, 'incremental'), concat(' WHERE LastModifiedDate > ', replace(replace(item().last_watermark, ' ', 'T'), 'Z', ''), 'Z'), ''))",
                                                             "type": "Expression"
                                                         },
                                                         "includeDeletedObjects": false
