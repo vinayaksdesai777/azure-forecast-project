@@ -80,7 +80,10 @@ These are not yet covered by automated tests and are verified manually in Databr
 | SIL-05 | Invalid category present | Row **retained** in Silver; `CATEGORY_VALIDATION` logged with non-zero `records_failed` |
 | SIL-06 | Invalid currency `XYZ` present | Row **retained**; `CURRENCY_VALIDATION` logged |
 | SIL-07 | Re-run the same batch | Silver row count unchanged (merge is idempotent) |
-| SIL-08 | Types after load | `forecast_qty` is `DECIMAL(18,4)`, `revenue_amount` `DECIMAL(18,2)`, `forecast_date` `DATE` |
+| SIL-08 | Landing cleared after load | Consumed files present under `archive/<data_subject>/<load_job_nr>/`, absent from landing |
+| SIL-09 | File dropped mid-run | A file arriving after the read snapshot stays in landing and is picked up next cycle |
+| SIL-10 | Repeat run, no new extract | Second run reads an empty landing, writes `SUCCESS` with zero counts — it does not re-read the prior extract |
+| SIL-11 | Types after load | `forecast_qty` is `DECIMAL(18,4)`, `revenue_amount` `DECIMAL(18,2)`, `forecast_date` `DATE` |
 
 ### 3.2 Gold — `03_silver_to_gold`
 
@@ -112,10 +115,14 @@ These are not yet covered by automated tests and are verified manually in Databr
 | ID | Case | Expectation |
 |---|---|---|
 | EXT-01 | Full load, `load_type='full'` | Landing Parquet written; row count matches source |
-| EXT-02 | Watermark advance | `last_watermark` updated, `load_type` flips to `incremental` |
+| EXT-02 | Watermark advance | `last_watermark` = `MAX(watermark_column)` of the landed slice (not a clock value), `load_type` flips to `incremental` |
 | EXT-03 | Incremental run | Only rows above the watermark extracted (~8–10k) |
 | EXT-04 | `is_active = false` | Subject skipped entirely |
 | EXT-05 | SHIR down | Weekly subject fails; other subjects unaffected |
+| EXT-06 | Salesforce watermark is exact | `LastModifiedDate` is in the SOQL projection and dropped again in Silver, so `last_watermark` is `MAX(LastModifiedDate)`, not a clock value |
+| EXT-06a | Watermark column absent from landing | A subject whose watermark column never reaches landing warns and falls back to the clock; the load still succeeds |
+| EXT-07 | Re-extract an older slice | Observed `MAX` below the stored watermark leaves `last_watermark` unchanged — it never walks backwards |
+| EXT-08 | No `watermark_column` configured | `00_update_watermark` exits early, nothing advances, no failure |
 
 ---
 
@@ -127,10 +134,13 @@ Run monthly first — it is the smallest subject.
 
 1. Seed the source.
 2. Trigger `pl_extract_to_landing`.
-3. Confirm landing Parquet exists.
-4. Confirm Silver, Gold, and agg rows in `job_log` for the same `run_id`.
-5. Confirm `dim_product` = 500, `dim_location` = 200.
-6. Confirm `v_forecast_star` count equals `fact_forecast` count.
+3. Confirm Silver, Gold, and agg rows in `job_log` for the same `run_id`.
+4. Confirm `dim_product` = 500, `dim_location` = 200.
+5. Confirm `v_forecast_star` count equals `fact_forecast` count.
+6. Confirm the extract's Parquet is now under `archive/<data_subject>/<load_job_nr>/` and
+   landing is empty — the Silver load archives and clears what it consumed. To inspect
+   landing Parquet directly, check between the extract and the Silver load, or run
+   `pl_extract_to_landing` alone.
 
 ### 4.2 All four subjects
 

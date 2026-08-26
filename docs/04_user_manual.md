@@ -24,6 +24,9 @@ Flow: `pl_extract_to_landing` (source → landing Parquet, watermark) →
 `04_aggregated_audit`).
 
 There is no Bronze layer. Landing Parquet plus the archive container is the raw archive.
+Landing is a rolling window: `01_landing_to_silver` archives the files it consumed to
+`archive/<data_subject>/<load_job_nr>/` and clears them from landing, so an empty landing
+folder after a successful run is expected, not a fault.
 
 ---
 
@@ -175,7 +178,7 @@ LIMIT  50;
 | HANA connection / TLS error | `ngdbc.jar` missing, or cluster not Single User | Reinstall the JAR; Shared clusters are blocked by the UC artifact allowlist |
 | SQL Server timeout | SHIR offline | Check the SHIR service on the on-prem host |
 | Salesforce storage error | Dev org 10 MB cap | Expected; partial load is handled correctly |
-| `Path does not exist` on landing | Extraction never wrote | Check `pl_extract_to_landing` ran first |
+| `Path does not exist` on landing | Extraction never wrote, or a previous Silver load already archived and cleared it | Check `pl_extract_to_landing` ran first; an empty landing after a successful load is normal — look under `archive/<data_subject>/` |
 | Dimension counts drifting above 500/200 | Seed data keying regression | See §9 |
 
 ---
@@ -215,7 +218,16 @@ SET    last_watermark = '2026-01-31 23:59:59', updated_ts = current_timestamp()
 WHERE  data_subject = '<subject>';
 ```
 
-`00_update_watermark` does this automatically after a successful extract.
+`00_update_watermark` does this automatically after a successful extract. It takes
+`MAX(watermark_column)` from the data that actually landed rather than the wall clock, so
+a row committed while the extract was running is picked up on the next cycle instead of
+being skipped. Setting a watermark by hand, as above, is the one case where a value the
+source has not reached yet will silently skip rows.
+
+Two behaviours worth knowing: a watermark can never move backwards automatically (an
+observed value older than the stored one is ignored), and a subject whose
+`watermark_column` never reaches landing falls back to the clock and logs a warning. All
+four subjects currently land their watermark column, so all four are exact.
 
 ---
 

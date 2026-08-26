@@ -153,7 +153,7 @@ All three sources produce the same business columns:
 
 | Layer | Format | Typing | Write mode | Guarantee |
 |---|---|---|---|---|
-| Landing | Parquet | Source types | Overwrite per extract | Untransformed source bytes; copied to `archive` |
+| Landing | Parquet | Source types | Rolling window | Untransformed source bytes; archived then cleared after each load |
 | Silver | Delta | Fully typed | Two-pass SCD2 `MERGE` | System of record; attribute history retained |
 | Gold | Delta | Fully typed | `replaceWhere` on `_frequency` | Current restated forecast, surrogate-keyed |
 
@@ -177,7 +177,7 @@ surrogate keys plus the natural keys retained for lineage and reconciliation.
 
 **Expected dimension cardinality after a clean load:** `dim_product` = **500** rows,
 `dim_location` = **200** rows. These two numbers are the fastest proof that the seed data
-is keyed correctly (see §7.6).
+is keyed correctly (see §7.7).
 
 ---
 
@@ -187,26 +187,52 @@ is keyed correctly (see §7.6).
 Landing Parquet plus the archive container provides the reprocessing guarantee Bronze
 would have. See §3.1.
 
-### 7.2 Deterministic surrogate keys
+Landing is a **rolling window**, not the history. `01_landing_to_silver` snapshots the
+file list before reading, and after a successful load copies exactly those files to
+`archive/<data_subject>/<load_job_nr>/` and clears them from landing. Before this, the
+load only ever copied and never cleared, so each cycle re-read every previous extract and
+the incremental load quietly became an ever-growing full reload. The SCD2 merge kept the
+result correct; only runtime suffered. Clearing only the snapshotted paths means a file
+dropped by an overlapping extract mid-run survives to the next cycle, and the clear is
+skipped entirely unless every file was archived first.
+
+### 7.2 Watermark derived from landed data
+The new high-watermark is `MAX(watermark_column)` read back from what actually landed,
+not `@utcNow()` from ADF. A source row committed while the extract is running carries a
+timestamp earlier than `utcNow` but is not in the result set, so a next run filtering on
+`> utcNow` would skip it permanently — a silent, unrecoverable loss. Reading back what
+landed means the next run resumes exactly where this one stopped. Three cases are
+handled: no `watermark_column` configured exits early; a column that never reaches landing
+warns and falls back to the clock rather than failing an otherwise-good load; and an
+observed value older than the stored one keeps the stored value, so a re-run of an older
+slice cannot walk the watermark backwards.
+
+All four subjects land their watermark column, so all four derive an exact value. HANA and
+SQL Server extract with `SELECT *`; Salesforce names its columns, so `LastModifiedDate` is
+listed explicitly in the SOQL projection and then dropped again by `_SF_COL_MAP` in
+`01_landing_to_silver` — the SCD2 merge resolves every target column against the incoming
+frame, so an unmapped column would fail the load with `DELTA_MERGE_UNRESOLVED_EXPRESSION`.
+
+### 7.3 Deterministic surrogate keys
 `sha2(natural_key ‖ effective_from)` rather than an identity column. Identity values are
 order-dependent and need cross-executor coordination; a deterministic hash survives a
 full warehouse rebuild without orphaning the fact, and is stable across environments.
 
-### 7.3 Periodic snapshot fact with `replaceWhere`
+### 7.4 Periodic snapshot fact with `replaceWhere`
 A forecast is an estimate that gets **restated**, not an event that accumulates. Each run
 rebuilds only its own slice with `replaceWhere _frequency = '<freq>'`, leaving the other
 three subjects untouched. A plain overwrite would drop them.
 
-### 7.4 Shared Silver and fact tables
+### 7.5 Shared Silver and fact tables
 All four subjects share one business grain, so they share one Silver table and one fact
 table, partitioned by `_frequency`. Four physical tables would force a `UNION ALL` into
 every downstream query.
 
-### 7.5 Config-driven orchestration
+### 7.6 Config-driven orchestration
 Runtime config is read from `hpe_catalog.audit.pipeline_config` by the
 `00_get_metadata` notebook and returned to ADF. No JDBC, no Azure SQL.
 
-### 7.6 Dirty data by design
+### 7.7 Dirty data by design
 The seed scripts inject deliberate violations so the DQ layer has something to catch:
 unknown categories (`HARDWARE`, `UNKNOWN`, `MISC`) and an invalid currency (`XYZ`).
 
@@ -224,7 +250,7 @@ Dimension attributes are now derived from the same expression that builds the ke
 category and sub_category from `(row % 500)`, region and country from `(row * 7) % 200`.
 Currency stays row-keyed — it is a fact attribute, not a dimension.
 
-### 7.7 Quarantine vs informational DQ
+### 7.8 Quarantine vs informational DQ
 Structural failures (null PK, duplicates) are unrecoverable and route rows to quarantine.
 Domain failures (unexpected category or currency) are often a legitimately new value, so
 rows are kept and the violation is logged instead.

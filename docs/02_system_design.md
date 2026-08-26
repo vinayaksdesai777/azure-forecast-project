@@ -41,8 +41,12 @@ the rationale.
    - `SapHana` → Databricks notebook activity running `01_ingest_hana_to_landing` (JDBC).
    - `SqlServer` → ADF Copy through `shir-hpe-forecast` to landing Parquet.
    - `Salesforce` → ADF Copy via the Salesforce connector to landing Parquet.
-4. **Watermark** — on success, `00_update_watermark` writes the new high-watermark and
-   sets `load_type = 'incremental'`.
+4. **Watermark** — on success, `00_update_watermark` reads back what landed, takes
+   `MAX(watermark_column)` as the new high-watermark, and sets `load_type = 'incremental'`.
+   The value comes from the landed data rather than `@utcNow()` so a row committed
+   mid-extract is picked up next cycle instead of being stepped over. It runs inside the
+   ForEach right after the extract, while the Silver load that clears landing only starts
+   once the whole ForEach is done — so the files are still there to read.
 5. **Chain** — invokes `pl_master_etl_pipeline` for the subject.
 
 For `load_type = 'full'` the source query is unbounded. For `incremental`, it is bounded
@@ -70,7 +74,12 @@ Runs as one notebook; the numbered stages below are its internal order.
    tracking `forecast_qty`, `revenue_amount`, and the descriptive attributes.
 8. **Period aggregate** — `DerivePeriodTransform` rolls the batch up into
    `hpe_catalog.silver.o9_forecast_period_agg`.
-9. **Audit** — one `SUCCESS` row with insert/update/error counts.
+9. **Archive and clear** — the files snapshotted in step 1 are copied to
+   `archive/<data_subject>/<load_job_nr>/` and removed from landing, making landing a
+   rolling window rather than an append-only pile. The clear is skipped unless every file
+   arrived in the archive, and only snapshotted paths are removed, so a file dropped by an
+   overlapping extract mid-run survives to the next cycle.
+10. **Audit** — one `SUCCESS` row with insert/update/error counts.
 
 ### 2.3 Silver → Gold — `03_silver_to_gold`
 
@@ -161,6 +170,10 @@ batch id instead is the classic wiring error, and the notebook fails loudly on i
 | `tr_monthly_schedule` | `o9_forecast_monthly` | 08:00 on the 1st |
 | `tr_quarterly_schedule` | `o9_forecast_quarterly` | 09:00 quarterly |
 
+All four fire **`pl_extract_to_landing`**, not `pl_master_etl_pipeline`. The chain runs
+extract → master: a trigger pointed straight at the master pipeline would reprocess
+whatever Parquet already sat in landing and never pull new rows from the source systems.
+
 ---
 
 ## 5. Integration Runtime Routing
@@ -212,5 +225,7 @@ but are referenced by no active pipeline.
 | `data_model/03_gold_schema.sql` | Recreates the Gold tables and the star view |
 | `sql/13_drop_bronze_layer.sql` | Drops the legacy Bronze schema; run only after Silver is verified |
 
-Landing and archive are never touched by a reset, so a full replay never needs to re-read
-the source systems.
+A reset touches neither landing nor archive. Note that landing is a rolling window that
+the Silver load clears as it consumes, so after a normal run the history lives in the
+`archive` container — a full replay re-reads from `archive`, never from the source
+systems.

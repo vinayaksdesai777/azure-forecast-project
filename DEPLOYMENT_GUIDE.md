@@ -285,6 +285,10 @@ az datafactory trigger start  --factory-name $ADF -g $RG --name tr_daily_schedul
 | `tr_monthly_schedule` | 1st 08:00 | `o9_forecast_monthly` |
 | `tr_quarterly_schedule` | Quarter start 09:00 | `o9_forecast_quarterly` |
 
+Each trigger fires **`pl_extract_to_landing`**, which extracts its subject and then chains
+into `pl_master_etl_pipeline`. Do not point a trigger at the master pipeline directly — it
+would reprocess whatever already sits in landing and never pull new source rows.
+
 **✓** All four show **Started** under Manage → Triggers.
 
 ---
@@ -323,7 +327,9 @@ To reload the medallion without re-provisioning:
 5. Once Silver is verified across subjects, [sql/13_drop_bronze_layer.sql](sql/13_drop_bronze_layer.sql)
    removes the legacy Bronze schema.
 
-Landing and archive are never touched by a reset, so a replay never re-reads the sources.
+A reset touches neither landing nor archive. Landing is a rolling window that the Silver
+load archives and clears as it consumes, so after a normal run the history lives in the
+`archive` container — a replay re-reads from there, never from the sources.
 
 ---
 
