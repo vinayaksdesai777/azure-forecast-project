@@ -193,7 +193,13 @@ BEGIN
                 v_qty, v_revenue, v_customer_id, v_channel,
                 v_category, v_sub_category, v_region, v_country,
                 v_currency, 'UNIT', 'DAILY', v_fiscal,
-                CURRENT_TIMESTAMP
+                -- CHANGED_ON must sit on the same timeline as FORECAST_DATE,
+                -- not on the wall clock. CURRENT_TIMESTAMP put the full load in
+                -- the seeding month while the delta scripts stamp their rows
+                -- with the period they represent, so the delta looked OLDER
+                -- than the full load and an incremental filtering
+                -- CHANGED_ON > watermark returned nothing.
+                ADD_SECONDS(TO_TIMESTAMP(v_forecast_date), MOD(v_row, 86400))
             );
         END FOR;
     END FOR;

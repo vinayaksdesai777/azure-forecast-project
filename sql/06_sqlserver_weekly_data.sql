@@ -217,7 +217,14 @@ SELECT
     product_id, location_id, forecast_date, forecast_qty, revenue_amount,
     customer_id, channel, category, sub_category, region, country,
     currency, N'UNIT', N'WEEKLY', fiscal_period,
-    DATEADD(SECOND, -(rn % 86400), GETUTCDATE())  -- stagger modified_dt for watermark realism
+    -- modified_dt must sit on the same timeline as forecast_date, not on the
+    -- wall clock. Stamping GETUTCDATE() here put the full load in the seeding
+    -- month (Aug 2026) while 09_sqlserver_weekly_delta stamps its rows with
+    -- their forecast week (Jan-Jun 2026) — so the delta looked OLDER than the
+    -- full load, and an incremental run filtering modified_dt > watermark
+    -- returned nothing at all. Derive it from forecast_date instead, staggered
+    -- within the day so the watermark still advances row to row.
+    DATEADD(SECOND, rn % 86400, CAST(forecast_date AS DATETIME2))
 FROM enriched;
 -- No WHERE clause: the NULL-product_id rows are meant to land as dirty data,
 -- and the filtered unique index lets them. The previous
