@@ -1,0 +1,35 @@
+{
+    "location": "global",
+    "properties": {
+        "description": "An activity failed. Fires even when a pipeline recovers on retry, so it catches transient faults a pipeline-level alert hides \u2014 a stopped HANA instance, an offline SHIR, a terminated Databricks cluster. Sev 2.",
+        "severity": 2,
+        "enabled": true,
+        "scopes": [
+            "__ADF_RESOURCE_ID__"
+        ],
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT15M",
+        "targetResourceType": "Microsoft.DataFactory/factories",
+        "criteria": {
+            "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+            "allOf": [
+                {
+                    "name": "condition1",
+                    "metricName": "ActivityFailedRuns",
+                    "metricNamespace": "Microsoft.DataFactory/factories",
+                    "operator": "GreaterThan",
+                    "threshold": 0,
+                    "timeAggregation": "Total",
+                    "criterionType": "StaticThresholdCriterion"
+                }
+            ]
+        },
+        "autoMitigate": true,
+        "actions": [
+            {
+                "actionGroupId": "__ACTION_GROUP_ID__",
+                "webHookProperties": {}
+            }
+        ]
+    }
+}

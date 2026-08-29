@@ -1,0 +1,35 @@
+{
+    "location": "global",
+    "properties": {
+        "description": "A schedule trigger failed to fire its pipeline. The most dangerous failure of the three: nothing runs at all and no pipeline appears in the run history, so silence looks identical to success. Sev 1.",
+        "severity": 1,
+        "enabled": true,
+        "scopes": [
+            "__ADF_RESOURCE_ID__"
+        ],
+        "evaluationFrequency": "PT15M",
+        "windowSize": "PT30M",
+        "targetResourceType": "Microsoft.DataFactory/factories",
+        "criteria": {
+            "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+            "allOf": [
+                {
+                    "name": "condition1",
+                    "metricName": "TriggerFailedRuns",
+                    "metricNamespace": "Microsoft.DataFactory/factories",
+                    "operator": "GreaterThan",
+                    "threshold": 0,
+                    "timeAggregation": "Total",
+                    "criterionType": "StaticThresholdCriterion"
+                }
+            ]
+        },
+        "autoMitigate": true,
+        "actions": [
+            {
+                "actionGroupId": "__ACTION_GROUP_ID__",
+                "webHookProperties": {}
+            }
+        ]
+    }
+}

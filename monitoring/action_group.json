@@ -1,0 +1,20 @@
+{
+    "location": "Global",
+    "properties": {
+        "groupShortName": "hpeforecast",
+        "enabled": true,
+        "emailReceivers": [
+            {
+                "name": "data-engineering",
+                "emailAddress": "REPLACE_WITH_EMAIL",
+                "useCommonAlertSchema": true
+            }
+        ],
+        "smsReceivers": [],
+        "webhookReceivers": [],
+        "azureAppPushReceivers": [],
+        "automationRunbookReceivers": [],
+        "azureFunctionReceivers": [],
+        "logicAppReceivers": []
+    }
+}

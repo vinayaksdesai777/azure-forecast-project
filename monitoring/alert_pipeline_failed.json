@@ -1,0 +1,35 @@
+{
+    "location": "global",
+    "properties": {
+        "description": "A pipeline run failed. Covers both pl_extract_to_landing and pl_master_etl_pipeline, scheduled or manual. Sev 1: the medallion is stale for that subject until the run is repeated.",
+        "severity": 1,
+        "enabled": true,
+        "scopes": [
+            "__ADF_RESOURCE_ID__"
+        ],
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT15M",
+        "targetResourceType": "Microsoft.DataFactory/factories",
+        "criteria": {
+            "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+            "allOf": [
+                {
+                    "name": "condition1",
+                    "metricName": "PipelineFailedRuns",
+                    "metricNamespace": "Microsoft.DataFactory/factories",
+                    "operator": "GreaterThan",
+                    "threshold": 0,
+                    "timeAggregation": "Total",
+                    "criterionType": "StaticThresholdCriterion"
+                }
+            ]
+        },
+        "autoMitigate": true,
+        "actions": [
+            {
+                "actionGroupId": "__ACTION_GROUP_ID__",
+                "webHookProperties": {}
+            }
+        ]
+    }
+}

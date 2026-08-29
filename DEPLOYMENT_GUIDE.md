@@ -293,6 +293,42 @@ would reprocess whatever already sits in landing and never pull new source rows.
 
 ---
 
+## 8b. Alerting
+
+The four triggers run unattended, so a failure at 06:00 is invisible until
+someone opens the run history — and the medallion serves stale data for that
+subject in the meantime. Deploy the alerts before relying on the schedule:
+
+```powershell
+./monitoring/deploy_alerts.ps1 -Email you@example.com
+```
+
+That creates one action group (`ag-hpe-forecast`) and three metric rules:
+
+| Rule | Metric | Sev | Catches |
+|---|---|---|---|
+| `ar-adf-pipeline-failed` | `PipelineFailedRuns` | 1 | a run failed outright |
+| `ar-adf-activity-failed` | `ActivityFailedRuns` | 2 | an activity failed even if a retry saved the run — a stopped HANA instance, an offline SHIR, a terminated cluster |
+| `ar-adf-trigger-failed` | `TriggerFailedRuns` | 1 | the trigger never fired at all |
+
+The trigger rule matters most. When a trigger fails, no pipeline run is created,
+so nothing appears in the run history and silence looks exactly like success —
+the one failure the other two rules cannot see.
+
+Azure emails the recipient a confirmation on first creation; the address is not
+armed until they accept it.
+
+**✓** `az rest --method get --url ".../metricAlerts?api-version=2018-03-01"`
+lists three rules with `enabled: true`, each carrying one action.
+
+> Not covered by metric alerts: a run that **succeeds having loaded nothing**.
+> The pipeline logs that path deliberately (`Log No Source Files`, and silver's
+> `NO_DATA` exit), so it is a success by ADF's reckoning. Catching it needs a
+> log-based alert over `hpe_catalog.audit.job_log`, which is the next
+> monitoring step rather than something these three rules miss by accident.
+
+---
+
 ## 9. Validate and harden
 
 ```powershell
