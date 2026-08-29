@@ -107,8 +107,19 @@ try:
     # archive-and-clear at the end removes only these, so a file dropped by a
     # concurrent extract while this run is in flight is left for the next run
     # rather than being deleted unread.
-    consumed_files = [f.path for f in dbutils.fs.ls(source_path) if f.path.endswith(".parquet")]
-    print(f"Consuming {len(consumed_files)} landing file(s)")
+    # Match both shapes ADF/Databricks land here. The SQL Server Copy activity
+    # writes a flat "<name>.parquet" file; the HANA notebook writes through
+    # Spark, which produces a DIRECTORY "<name>.parquet/" holding part-* files.
+    # dbutils.fs.ls returns directories with a trailing slash, so a bare
+    # endswith(".parquet") missed every HANA extract and landing never cleared
+    # for the daily and quarterly subjects — each run then re-read every earlier
+    # file, and in a restatement run the revised rows collided with their own
+    # originals and were quarantined as duplicates instead of applied.
+    consumed_files = [
+        f.path for f in dbutils.fs.ls(source_path)
+        if f.path.rstrip("/").endswith(".parquet")
+    ]
+    print(f"Consuming {len(consumed_files)} landing file(s)/dir(s)")
 
     raw_df = spark.read.format("parquet").load(glob_path)
 
@@ -143,8 +154,8 @@ if src_count == 0:
     # cycle. An extract that matched no rows still writes a header-only Parquet,
     # which is what a Salesforce run against an empty object produces.
     for f in consumed_files:
-        dbutils.fs.rm(f)
-    print(f"No rows in {len(consumed_files)} landing file(s); cleared without archiving")
+        dbutils.fs.rm(f, recurse=True)
+    print(f"No rows in {len(consumed_files)} landing item(s); cleared without archiving")
 
     write_audit_entry(spark, batch_id=batch_id, layer="silver", status="SUCCESS",
                       records_inserted=0, source_system=source_system,
@@ -290,15 +301,19 @@ print(f"Period agg written to: {agg_table}")
 archive_path = get_adls_path(CONTAINER_ARCHIVE, f"{data_subject}/{load_job_nr}/")
 dbutils.fs.cp(source_path, archive_path, recurse=True)
 
-archived = [f.name for f in dbutils.fs.ls(archive_path) if f.name.endswith(".parquet")]
+# Same trailing-slash rule as the read side: a Spark-written extract arrives as
+# a directory, not a file.
+archived = [f.name for f in dbutils.fs.ls(archive_path)
+            if f.name.rstrip("/").endswith(".parquet")]
 if len(archived) < len(consumed_files):
     raise RuntimeError(
-        f"Archive incomplete: {len(consumed_files)} file(s) consumed from landing but "
+        f"Archive incomplete: {len(consumed_files)} item(s) consumed from landing but "
         f"{len(archived)} archived at {archive_path}. Landing left untouched."
     )
 
+# recurse=True so a Spark output directory goes with its part-* files.
 for f in consumed_files:
-    dbutils.fs.rm(f)
+    dbutils.fs.rm(f, recurse=True)
 print(f"Archived {len(archived)} file(s) to {archive_path}; cleared {len(consumed_files)} from landing")
 
 write_audit_entry(
