@@ -1,7 +1,7 @@
 {
     "name": "pl_master_etl_pipeline",
     "properties": {
-        "description": "Master orchestration: Landing Parquet → Silver → Gold via Databricks notebooks. No Azure SQL. Metadata from Unity Catalog via 00_get_metadata notebook.",
+        "description": "Master orchestration: Landing Parquet \u2192 Silver \u2192 Gold via Databricks notebooks. No Azure SQL. Metadata from Unity Catalog via 00_get_metadata notebook.",
         "activities": [
             {
                 "name": "Check Source Files Exist",
@@ -158,7 +158,7 @@
                     "ifFalseActivities": [
                         {
                             "name": "Log No Source Files",
-                            "description": "No Parquet files in landing — log NO_DATA via audit notebook.",
+                            "description": "No Parquet files in landing \u2014 log NO_DATA via audit notebook.",
                             "type": "DatabricksNotebook",
                             "typeProperties": {
                                 "notebookPath": "/Workspace/Users/vinayakdesai604_gmail.com#ext#@vinayakdesai604gmail.onmicrosoft.com/azure-forecast-project/databricks/notebooks/00_get_metadata",
@@ -180,6 +180,38 @@
                             }
                         }
                     ]
+                }
+            },
+            {
+                "name": "Run Pipeline Health Check",
+                "description": "Reads audit.job_log and raises if this subject is stale, wrote nothing, or has failures since its last success. Depends on Completed rather than Succeeded so it also runs on the no-source-files branch \u2014 a run that loads nothing is a SUCCESS to ADF, which is precisely the case the metric alerts cannot see.",
+                "type": "DatabricksNotebook",
+                "dependsOn": [
+                    {
+                        "activity": "If Source Files Exist",
+                        "dependencyConditions": [
+                            "Completed"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "0.00:20:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30
+                },
+                "typeProperties": {
+                    "notebookPath": "/Workspace/Users/vinayakdesai604_gmail.com#ext#@vinayakdesai604gmail.onmicrosoft.com/azure-forecast-project/databricks/notebooks/05_pipeline_health_check",
+                    "baseParameters": {
+                        "data_subject": {
+                            "value": "@pipeline().parameters.data_subject",
+                            "type": "Expression"
+                        },
+                        "fail_on_issues": "true"
+                    }
+                },
+                "linkedServiceName": {
+                    "referenceName": "ls_databricks",
+                    "type": "LinkedServiceReference"
                 }
             }
         ],
