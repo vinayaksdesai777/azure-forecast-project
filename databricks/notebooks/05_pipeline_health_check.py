@@ -47,15 +47,44 @@ fail_on_issues = dbutils.widgets.get("fail_on_issues").strip().lower() == "true"
 
 # COMMAND ----------
 
-# How long a subject may go without a successful load before it is stale.
-# Generous multiples of the cadence: a daily subject missing one run is worth
-# knowing about, but a single late run should not page anyone.
+# How long a subject may go without a successful load before it is stale:
+# its cadence plus a grace period, NOT a multiple of the cadence.
+#
+# The first version used generous multiples (monthly = 35 days) on the reasoning
+# that a whole missed cycle is what matters. Measured against real data that
+# turned out to detect nothing useful: monthly and quarterly had both been 10
+# days without a load and the check still reported zero findings. A monthly
+# subject that fails on the 1st should not go unnoticed until the 5th of the
+# following month.
+#
+# Grace is roughly one cadence period for the sub-daily subjects and 72h for
+# the rest, which tolerates a single retried run without tolerating a silent
+# outage.
+#
+# Be clear about the limit of this check. For the infrequent subjects it is
+# necessarily weak: a monthly load legitimately goes ~31 days between runs, so
+# any window that tolerates normal operation also tolerates a fortnight of
+# silence. Measured here, monthly sat 239h stale and still read 29% of its
+# window. Freshness alone cannot catch a missed monthly run promptly — what
+# catches it is TriggerFailedRuns (the trigger did not fire) plus the volume
+# check below (the run fired and moved nothing). This check is the backstop for
+# the case where neither of those fires, not the primary signal.
+#
+# The honest fix for monthly and quarterly is to compare against the SCHEDULE
+# rather than elapsed time: after the 1st of a month, assert a load exists with
+# insert_time in that month. That needs the trigger cadence in pipeline_config,
+# which it does not carry today.
 SLA_HOURS = {
-    "o9_forecast_daily":     36,     # 1.5 days
-    "o9_forecast_weekly":    9 * 24,   # 9 days
-    "o9_forecast_monthly":   35 * 24,  # 35 days
-    "o9_forecast_quarterly": 100 * 24, # 100 days
+    "o9_forecast_daily":     36,       # 24h cadence + 12h
+    "o9_forecast_weekly":    9 * 24,   # 7d  cadence + 2d
+    "o9_forecast_monthly":   34 * 24,  # 31d cadence + 3d
+    "o9_forecast_quarterly": 95 * 24,  # 92d cadence + 3d
 }
+
+# A load that is merely late is worth seeing before it breaches. Anything past
+# this fraction of the SLA is reported as AGEING without failing the run, so a
+# drift shows up in the log while there is still time to act.
+WARN_FRACTION = 0.75
 
 # COMMAND ----------
 
@@ -75,6 +104,7 @@ print(f"Checking {len(subjects)} subject(s): {', '.join(subjects)}")
 # COMMAND ----------
 
 findings = []
+warnings = []
 report = []
 
 for subject in subjects:
@@ -111,6 +141,13 @@ for subject in subjects:
             f"beyond the {sla}h SLA"
         )
         status = "STALE"
+    elif age_hours > sla * WARN_FRACTION:
+        # Reported, not a finding: this does not fail the run.
+        warnings.append(
+            f"{subject}: {age_hours:.1f}h since the last load, "
+            f"{100 * age_hours / sla:.0f}% of its {sla}h SLA"
+        )
+        status = "AGEING"
 
     # 2. Volume. Zero inserts AND zero updates means the run moved no data at
     #    all. Zero inserts with a non-zero update count is a normal restatement
@@ -149,6 +186,12 @@ for subject, age, ins, upd, status in report:
     print(f"{subject:26} {age_s:>7} {ins_s:>10} {upd_s:>9}  {status}")
 
 # COMMAND ----------
+
+if warnings:
+    print()
+    print("Ageing (not yet breaching):")
+    for w in warnings:
+        print(f"  {w}")
 
 if findings:
     message = f"{len(findings)} pipeline health finding(s):\n  " + "\n  ".join(findings)
