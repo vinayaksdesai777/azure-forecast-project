@@ -1,0 +1,84 @@
+name: CI
+
+# Catch on push what would otherwise surface as a failed pipeline run minutes
+# after a deployment: a malformed artifact, a mismatched connector family, a
+# reference to something that is not in the repo, or a regression in the
+# Databricks utilities.
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+jobs:
+  validate-adf:
+    name: ADF artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # No dependencies: the validator is stdlib only, so this stays fast and
+      # cannot break on an unrelated package bump.
+      - name: Validate adf/ artifacts
+        run: python tests/validate_adf_artifacts.py
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Java is required for the local SparkSession. Without it the suite still
+      # passes, but every Spark-backed test skips and the run proves nothing.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyspark==4.0.1 delta-spark pytest
+
+      - name: Run tests
+        run: pytest tests/ -v -rs
+
+      # A green run that skipped everything is not a passing build. Fail loudly
+      # rather than let an environment fault masquerade as success.
+      - name: Fail if the Spark tests skipped
+        run: |
+          pytest tests/ -q -rs 2>&1 | tee result.txt
+          if grep -qE "^[0-9]+ skipped" result.txt; then
+            echo "::error::Spark-backed tests skipped; the JVM did not start"
+            grep -i "skipped" result.txt
+            exit 1
+          fi
+
+  seed-key-integrity:
+    name: Seed business keys
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The seed scripts are SQL, so nothing executes them here. This replays
+      # their key arithmetic in Python instead: product and location derived
+      # from position within the period must give every period a full set of
+      # distinct pairs. Keying to the global row number collapsed 30,000
+      # rows/quarter onto 1,000 real combinations, and only SQL Server's unique
+      # constraint caught it — HANA and Salesforce loaded the duplicates
+      # silently.
+      - name: Check the key derivation still produces distinct pairs
+        run: python tests/check_seed_keys.py
