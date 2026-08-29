@@ -332,9 +332,29 @@ lists three rules with `enabled: true`, each carrying one action.
 ## 9. Validate and harden
 
 ```powershell
-pip install pyspark pytest
+pip install pyspark pytest delta-spark
 pytest tests/ -v
 ```
+
+Two suites:
+
+| File | Tests | What it covers |
+|---|---|---|
+| `test_data_quality.py` | 9 | DQ expressions written inline - a copy of the logic, not the shipped code |
+| `test_pipeline_utilities.py` | 8 | imports `databricks/utilities` directly, so a regression in the real code fails the suite |
+
+The second is the one that protects you. Each case corresponds to a defect that
+reached a running load - surrogate keys colliding for two versions created the
+same day, `resolve_dim_sk` matching an expired version alongside the active one,
+`DomainCheck` dropping rows it should only flag - and its docstring names the
+symptom, so a reintroduced bug fails with an explanation.
+
+> **The Spark-backed tests skip rather than fail when no local JVM starts.**
+> On Windows the Spark launcher scripts under `SPARK_HOME/bin` do not quote
+> paths, so an install path containing a space (`C:\Users\First Last`) dies with
+> "The system cannot find the file `C:\Users\First`". Run `pytest -rs` to see the
+> reason. They run normally on a Databricks cluster, in CI on Linux, or from a
+> local checkout on a path with no spaces.
 
 Then:
 
