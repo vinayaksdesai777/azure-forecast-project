@@ -29,6 +29,15 @@ def _spark_or_none():
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
     os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
 
+    # Reuse a session the host already owns before trying to build one.
+    # Databricks creates the SparkContext in the driver and rejects any attempt
+    # to construct a second, so on a cluster this is the only path that works —
+    # and it is also correct anywhere else, since building a second local
+    # session per test run is pure waste.
+    existing = SparkSession.getActiveSession() or SparkSession._instantiatedSession
+    if existing is not None:
+        return existing, None
+
     try:
         session = (
             SparkSession.builder.appName("pipeline-tests")
@@ -51,4 +60,5 @@ def spark():
     if session is None:
         pytest.skip(reason)
     yield session
-    session.stop()
+    # Never stop a session we did not create: on Databricks that would kill the
+    # driver's shared context and take the notebook down with it.
