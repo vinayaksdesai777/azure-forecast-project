@@ -7,7 +7,7 @@
             "recurrence": {
                 "frequency": "Month",
                 "interval": 3,
-                "startTime": "2024-01-01T09:00:00Z",
+                "startTime": "2026-09-01T00:00:00Z",
                 "timeZone": "UTC",
                 "schedule": {
                     "monthDays": [
