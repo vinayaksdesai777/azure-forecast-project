@@ -4,21 +4,8 @@ Run with: pytest tests/test_data_quality.py
 """
 
 import pytest
-from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType, StructField, StringType, DoubleType
-
-
-@pytest.fixture(scope="session")
-def spark():
-    """Create a SparkSession for testing."""
-    return (
-        SparkSession.builder
-        .master("local[2]")
-        .appName("DataQualityTests")
-        .config("spark.sql.shuffle.partitions", "2")
-        .getOrCreate()
-    )
 
 
 @pytest.fixture
