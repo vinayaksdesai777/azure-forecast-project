@@ -3,7 +3,7 @@
     "type": "Microsoft.DataFactory/factories/linkedservices",
     "properties": {
         "type": "AzureDatabricks",
-        "description": "Databricks workspace running every notebook activity: 00_get_metadata, 01_ingest_hana_to_landing, 00_update_watermark, 01_landing_to_silver, 03_silver_to_gold and 04_aggregated_audit. Both pipelines reference this one. ls_azure_databricks is an earlier duplicate pointing at the same workspace and cluster, kept only so an existing deployment does not break; nothing references it. Authenticates with a Databricks personal access token, which ADF stores as an encryptedCredential and which therefore cannot be committed — supply it via accessToken in ADF Studio, or switch the linked service to MSI so no secret is needed at all.",
+        "description": "Databricks workspace running every notebook activity: 00_get_metadata, 01_ingest_hana_to_landing, 00_update_watermark, 01_landing_to_silver, 03_silver_to_gold and 04_aggregated_audit. Both pipelines reference this one. ls_azure_databricks is an earlier duplicate pointing at the same workspace and cluster, kept only so an existing deployment does not break; nothing references it. Authenticates with a Databricks personal access token, which ADF stores as an encryptedCredential and which therefore cannot be committed \u2014 supply it via accessToken in ADF Studio, or switch the linked service to MSI so no secret is needed at all.",
         "typeProperties": {
             "domain": "https://adb-7405619554378915.15.azuredatabricks.net",
             "existingClusterId": "0720-172715-x2t9kckc",
@@ -11,10 +11,6 @@
                 "type": "SecureString",
                 "value": "<databricks-personal-access-token>"
             }
-        },
-        "connectVia": {
-            "referenceName": "AutoResolveIntegrationRuntime",
-            "type": "IntegrationRuntimeReference"
         },
         "annotations": []
     }

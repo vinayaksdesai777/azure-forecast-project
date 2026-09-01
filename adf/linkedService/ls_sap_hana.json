@@ -3,10 +3,6 @@
     "type": "Microsoft.DataFactory/factories/linkedservices",
     "properties": {
         "type": "SapHana",
-        "connectVia": {
-            "referenceName": "AutoResolveIntegrationRuntime",
-            "type": "IntegrationRuntimeReference"
-        },
         "typeProperties": {
             "connectionString": "SERVERNODE=<sap_hana_cloud_host>.hanacloud.ondemand.com:443;sslEnabled=true;",
             "authenticationType": "Basic",
@@ -17,6 +13,6 @@
             }
         },
         "annotations": [],
-        "description": "SAP HANA Cloud source. AutoResolve IR (cloud-to-cloud, no SHIR). Password stored as SecureString — ADF encrypts at publish. Set real values via ADF Studio UI (never commit plaintext passwords)."
+        "description": "SAP HANA Cloud source. AutoResolve IR (cloud-to-cloud, no SHIR). Password stored as SecureString \u2014 ADF encrypts at publish. Set real values via ADF Studio UI (never commit plaintext passwords)."
     }
 }

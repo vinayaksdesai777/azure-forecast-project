@@ -1,14 +1,14 @@
 {
     "location": "global",
     "properties": {
-        "description": "A pipeline run failed. Covers both pl_extract_to_landing and pl_master_etl_pipeline, scheduled or manual. Sev 1: the medallion is stale for that subject until the run is repeated.",
+        "description": "A pipeline run failed. Covers both pl_extract_to_landing and pl_master_etl_pipeline, scheduled or manual. Sev 1: the medallion is stale for that subject until the run is repeated. Window and frequency are both 1h. The first version evaluated a 15-minute window every 5 minutes with autoMitigate on, so three real failures produced a fired/resolved pair roughly every 45 minutes as the same events rolled in and out of the window \u2014 alert fatigue from a handful of events. Matching the two means each window is evaluated once.",
         "severity": 1,
         "enabled": true,
         "scopes": [
             "__ADF_RESOURCE_ID__"
         ],
-        "evaluationFrequency": "PT5M",
-        "windowSize": "PT15M",
+        "evaluationFrequency": "PT1H",
+        "windowSize": "PT1H",
         "targetResourceType": "Microsoft.DataFactory/factories",
         "criteria": {
             "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
