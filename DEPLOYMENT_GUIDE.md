@@ -329,7 +329,42 @@ lists three rules with `enabled: true`, each carrying one action.
 
 ---
 
-## 9. Validate and harden
+## 9. GitHub Actions release workflow
+
+This repository contains a production-ready GitHub Actions path for automated validation and deployment.
+
+### Required repository secrets
+
+Add these in GitHub → Settings → Secrets and variables → Actions:
+
+- `AZURE_CREDENTIALS` — Azure service principal JSON used by `azure/login@v2`
+- `ADF_RESOURCE_GROUP` — the resource group that contains the target Data Factory
+- `ADF_FACTORY_NAME` — the Data Factory name to update
+
+### Workflows
+
+- `.github/workflows/ci.yml` — pull-request and push validation. It runs the static ADF validation and the Python test suite.
+- `.github/workflows/deploy.yml` — deploys the ADF resources after the validation jobs pass on `main`.
+
+### Local validation equivalent
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\validate_release.ps1
+```
+
+This script runs the same static checks as the CI workflow and then executes the repo test suite.
+
+### Deployment command used by GitHub Actions
+
+```powershell
+./scripts/deploy_adf.ps1 -ResourceGroup "<rg>" -FactoryName "<adf-name>"
+```
+
+The deployment script enumerates the ADF artifact folders and creates or updates each linked service, dataset, integration runtime, pipeline, and trigger in the target factory.
+
+---
+
+## 10. Validate and harden
 
 ```powershell
 pip install pyspark pytest delta-spark

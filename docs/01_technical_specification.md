@@ -27,6 +27,18 @@ and the same four Databricks notebooks. Adding a fifth is an `INSERT` into
 | Data quality with quarantine and a DQ log | ML forecasting models |
 | Job and DQ audit in Unity Catalog Delta tables | Power BI report authoring |
 | Config-driven orchestration in Azure Data Factory | Multi-region DR |
+| GitHub Actions validation and deployment pipeline for ADF artifacts | Full infrastructure-as-code automation |
+
+### 2.1 Release and deployment controls
+
+The repository includes a managed CI/CD path for the Azure data platform:
+
+- GitHub Actions validates ADF JSON files and the Python test suite before a merge or deployment.
+- A deployment workflow runs only after the validation gate succeeds on the `main` branch.
+- Local release validation uses the same static checks and repo tests via `scripts/validate_release.ps1`.
+- Azure deployment uses `scripts/deploy_adf.ps1` to create or update ADF linked services, datasets, integration runtime, pipelines, and triggers.
+
+This is intentionally separate from the data pipeline logic itself: the release gate protects the platform configuration, while the upstream notebooks and SQL remain the operational product.
 
 ---
 
@@ -93,6 +105,7 @@ config rows stay loadable. Nothing reads it.
 | Governance | Unity Catalog — catalog, schemas, external locations, lineage |
 | Config & audit | Unity Catalog Delta (`hpe_catalog.audit.*`) |
 | Secrets | Databricks secret scope `hpe-forecast` |
+| Release automation | GitHub Actions + Azure login for validation and deployment |
 | Testing | pytest |
 
 **Deliberately not used.** Azure SQL (audit and config moved into Unity Catalog Delta),

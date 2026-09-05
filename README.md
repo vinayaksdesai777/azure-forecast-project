@@ -6,6 +6,27 @@ Built with Delta Lake, PySpark, Azure Data Factory, ADLS Gen2, and Unity Catalog
 
 ---
 
+## Starting from scratch
+
+Reading order for someone standing this up for the first time. Each document
+assumes the one before it is done.
+
+| # | Document | What it covers |
+|---|---|---|
+| 1 | [docs/05_source_system_setup.md](docs/05_source_system_setup.md) | The three source systems: a SAP HANA Cloud trial, SQL Server (local or Azure SQL), and a Salesforce Developer org. Account signup through to credentials. |
+| 2 | [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) | Azure: resource group, ADLS Gen2, Unity Catalog, Databricks secrets and cluster, ADF artifacts, triggers, alerting. |
+| 3 | [docs/03_test_plan.md](docs/03_test_plan.md) and [tests/README.md](tests/README.md) | Running the suite, locally and on a cluster. |
+| 4 | [docs/04_user_manual.md](docs/04_user_manual.md) | Day-to-day operation once it runs. |
+
+Start at 1. `DEPLOYMENT_GUIDE.md` §5 says "run the seed script" and assumes a
+database already exists to run it against — document 1 is how you get one.
+
+Background rather than instructions: [docs/01_technical_specification.md](docs/01_technical_specification.md)
+for what the pipeline does and [docs/02_system_design.md](docs/02_system_design.md)
+for why it is shaped this way.
+
+---
+
 ## Why this project exists
 
 Most portfolio pipelines stop at "read a CSV, write a Parquet." This one deliberately covers the parts that real data engineers get paid for:
@@ -232,11 +253,30 @@ Full step-by-step commands are in [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md).
 5. **Install the HANA JDBC driver** — upload `ngdbc.jar` to the cluster. Requires **Single User** access mode; Unity Catalog's artifact allowlist blocks JAR installs on Shared clusters unless a metastore admin adds an entry.
 6. **Register the SHIR** — install the Self-hosted Integration Runtime on the machine with SQL Server access and register it with the auth key from ADF.
 7. **Import Databricks notebooks** via Repos, then **deploy the ADF resources** (linked services, datasets, IR, pipelines, triggers).
-8. **Seed the source systems** — `sql/04`–`06` for HANA and SQL Server, `salesforce/generate_full_load.py` for Salesforce.
+8. **Seed the source systems** — `sql/04`–`06` for HANA and SQL Server, `salesforce/generate_full_load.py` for Salesforce. The systems themselves have to exist first: see [docs/05_source_system_setup.md](docs/05_source_system_setup.md).
 9. **Run tests** — `pip install pyspark pytest && pytest tests/`.
 10. **Enable the four triggers.**
 
 To re-run the medallion from scratch, `sql/10_reset_medallion.sql` clears all four subjects' Silver state and drops Gold so the dimensions rebuild.
+
+---
+
+## CI/CD and release validation
+
+The project now includes a repeatable release gate for real delivery, not just a manual local checklist.
+
+- `/.github/workflows/ci.yml` runs on push and pull request for the repository and validates the ADF artifact set plus the test suite.
+- `/.github/workflows/deploy.yml` runs on the `main` branch after the validation jobs pass and deploys the ADF JSON to Azure.
+- `scripts/validate_release.ps1` is the local equivalent of the release gate and validates both ADF JSON and the project tests.
+- `scripts/deploy_adf.ps1` deploys the ADF linked services, datasets, integration runtime, pipelines, and triggers in a repeatable way.
+
+Required GitHub Actions secrets:
+
+- `AZURE_CREDENTIALS`
+- `ADF_RESOURCE_GROUP`
+- `ADF_FACTORY_NAME`
+
+These are required before the deploy workflow can authenticate to Azure and update the target Data Factory.
 
 ---
 

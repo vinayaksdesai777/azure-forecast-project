@@ -1,0 +1,59 @@
+name: Deploy ADF assets
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'adf/**'
+      - 'databricks/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+
+jobs:
+  validate:
+    name: Validate artifacts and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyspark==4.0.1 delta-spark pytest
+
+      - name: Validate ADF JSON
+        run: python tests/validate_adf_artifacts.py
+
+      - name: Run test suite
+        run: pytest tests/ -v -rs
+
+  deploy:
+    name: Deploy ADF to Azure
+    needs: validate
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy Data Factory artifacts
+        shell: pwsh
+        run: |
+          ./scripts/deploy_adf.ps1 -ResourceGroup "${{ secrets.ADF_RESOURCE_GROUP }}" -FactoryName "${{ secrets.ADF_FACTORY_NAME }}"

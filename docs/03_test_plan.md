@@ -25,8 +25,19 @@
 | Integration | One notebook against real Delta tables | Databricks |
 | System | Full ADF run, extract → agg | Azure |
 | Data quality | Seeded violations reach `data_quality_log` | Databricks / SQL |
+| Release gate | ADF JSON checks + repo validation | GitHub Actions / local script |
 
-### 1.3 Test data
+### 1.3 Release gate and CI
+
+The repository now includes a delivery-quality gate before any Data Factory deployment is allowed:
+
+- `.github/workflows/ci.yml` runs on push and pull request and validates the ADF JSON contracts plus the Python test suite.
+- `.github/workflows/deploy.yml` deploys the ADF artifacts only after the `validate` job passes on the `main` branch.
+- `scripts/validate_release.ps1` provides the local equivalent of the same release gate and is the recommended pre-merge check.
+
+This is the operational safeguard against malformed ADF definitions, mismatched connector families, stale notebook paths, and regression in the Databricks utilities.
+
+### 1.4 Test data
 
 Full load covers Jul 2020 – Jun 2025:
 
@@ -214,6 +225,8 @@ GROUP  BY _frequency ORDER BY _frequency;
 Run after any change to the notebooks, the utilities, or the seed scripts:
 
 - [ ] `pytest tests/` passes
+- [ ] Release gate passes: ADF artifact validation + repo tests
+- [ ] GitHub Actions CI succeeds on the branch for the change
 - [ ] `dim_product` = 500, `dim_location` = 200
 - [ ] No product with multiple categories; no location with multiple region/country pairs
 - [ ] `v_forecast_star` count equals `fact_forecast` count

@@ -23,6 +23,7 @@
 | `utilities/transformations.py` | Module | Transform strategies, SCD2 merges, SK helpers |
 | `utilities/audit_helper.py` | Module | `write_audit_entry`, `mark_audit_failed`, `log_dq_result` |
 | `shir-hpe-forecast` | Integration runtime | On-prem SQL Server connectivity |
+| GitHub Actions | CI/CD | Validates ADF JSON and repo tests; deploys the target factory after the validation gate passes |
 
 There is no Bronze component. `01_ingest_to_bronze` and `02_bronze_to_silver` were merged
 into `01_landing_to_silver` in commit `654f3b3`; see the technical specification §3.1 for
@@ -173,6 +174,16 @@ batch id instead is the classic wiring error, and the notebook fails loudly on i
 All four fire **`pl_extract_to_landing`**, not `pl_master_etl_pipeline`. The chain runs
 extract → master: a trigger pointed straight at the master pipeline would reprocess
 whatever Parquet already sat in landing and never pull new rows from the source systems.
+
+### 4.2 Release automation
+
+The repository includes a deployment workflow that is part of the production control plane:
+
+- CI validates the ADF JSON and the Python test suite before the push is considered releasable.
+- The deploy workflow authenticates to Azure and creates or updates the target Data Factory artifacts after validation passes on `main`.
+- A local release gate mirrors the same checks through `scripts/validate_release.ps1`.
+
+This keeps the ADF definitions, the data tests, and the target environment aligned as a single release unit instead of depending on manual deployment steps.
 
 ---
 
